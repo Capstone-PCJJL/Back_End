@@ -2,8 +2,11 @@ certifi==2025.4.26
 charset-normalizer==3.4.2
 dotenv==0.9.9
 idna==3.10
+PyMySQL==1.1.1
 python-dotenv==1.1.0
 PyYAML==6.0.2
 requests==2.32.3
+SQLAlchemy==2.0.41
 tqdm==4.67.1
+typing_extensions==4.13.2
 urllib3==2.4.0

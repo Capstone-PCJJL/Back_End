@@ -14,7 +14,5 @@ DATABASE_URL = f"mysql+pymysql://{SQL_USER}:{SQL_PASS}@{SQL_HOST}:{SQL_PORT}/{SQ
 
 engine = create_engine(DATABASE_URL)
 
-# Test the connection
 with engine.connect() as conn:
-    result = conn.execute("SELECT VERSION();")
-    print("Database version:", result.fetchone()[0])
+    print('successful connection')
