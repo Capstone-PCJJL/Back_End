@@ -1,6 +1,10 @@
 import requests
+import os
+from dotenv import load_dotenv
 
-API_KEY = "b0446db15405aa72321a1bdc62954417"
+load_dotenv()
+
+API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.themoviedb.org/3"
 
 class Movie:
