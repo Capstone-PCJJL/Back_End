@@ -1,102 +1,132 @@
-# Movie Data Fetcher
+# Movie Data Collection and Processing System
 
-This script fetches movie data from the TMDB API and parses it into a workable data structure.
+A Python-based system for collecting and processing movie data from The Movie Database (TMDB) API. This system fetches movie information, processes it, and stores it in an organized manner for further analysis.
+
+## Project Structure
+
+```
+Back_End/
+├── src/
+│   ├── api/
+│   │   └── tmdb_client.py      # TMDB API client for data fetching
+│   ├── models/
+│   │   └── movie.py           # Movie data model using dataclasses
+│   ├── storage/
+│   │   └── data_storage.py    # Data storage handler for saving files
+│   └── main.py                # Main script orchestrating the process
+├── data/
+│   ├── movies/                # YAML files containing movie data by year
+│   └── changes/               # YAML files containing movie changes
+├── config/
+│   └── .env.example          # Example environment variables file
+├── requirements.txt          # Python dependencies
+└── README.md                # Project documentation
+```
+
+## Features
+
+- Fetches movie data from TMDB API (1900 to present)
+- Processes and stores all data in YAML format
+- Handles API rate limiting and error recovery
+- Provides progress tracking with loading bars
+- Organizes data by year
+- Includes direct image URLs in movie data
+- Properly handles missing image data
+
+## Prerequisites
+
+- Python 3.8 or higher
+- TMDB API credentials (API Key and Bearer Token)
 
 ## Setup
 
-### 1. Clone the Repository
+1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd <repository-directory>
+cd Back_End
 ```
 
-### 2. Create a Virtual Environment
+2. Create and activate a virtual environment:
 ```bash
+# On macOS/Linux
 python -m venv venv
-source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+source venv/bin/activate
+
+# On Windows
+python -m venv venv
+venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Create a .env File
-Create a `.env` file in the root directory with the following content:
+4. Set up environment variables:
+   - Copy `config/.env.example` to `config/.env`
+   - Add your TMDB API credentials:
 ```
-API_KEY=your_tmdb_api_key_here
-```
-
-### 5. Generate requirements.txt
-If you add new dependencies, update `requirements.txt` using:
-```bash
-pip freeze > requirements.txt
-```
-
-### 6. Using .gitignore
-Ensure your `.gitignore` file includes:
-```
-venv/
-.env
-__pycache__/
-*.pyc
+TMDB_API_KEY=your_api_key_here
+TMDB_BEARER_TOKEN=your_bearer_token_here
 ```
 
 ## Usage
-Run the script:
+
+Run the main script to start collecting movie data:
 ```bash
-python getMovies.py
+python src/main.py
 ```
 
-This will fetch all available movies and print the top 5 rated movies.
+The script will:
+1. Create necessary data directories
+2. Fetch and save recent movie changes
+3. Fetch movies year by year (1900 to present)
+4. Save movies in YAML format with image URLs
 
-## Git Usage
+## Data Organization
 
-### Branches
-- **Create a new branch:**
-  ```bash
-  git checkout -b <branch-name>
-  ```
-- **Switch to an existing branch:**
-  ```bash
-  git checkout <branch-name>
-  ```
-- **List all branches:**
-  ```bash
-  git branch
-  ```
+### Movies
+- Stored in `data/movies/` directory
+- Files named `movies_YYYY.yaml`
+- Contains movie details including:
+  - Title, release date, overview
+  - Popularity and vote statistics
+  - Genre IDs and language information
+  - Poster and backdrop paths (null if not available)
+  - Direct URLs to poster and backdrop images (null if not available)
 
-### Stashing
-- **Stash changes:**
-  ```bash
-  git stash
-  ```
-- **Apply stashed changes:**
-  ```bash
-  git stash apply
-  ```
-- **List stashes:**
-  ```bash
-  git stash list
-  ```
+### Changes
+- Stored in `data/changes/` directory
+- Files named `changes_YYYYMMDD_HHMMSS.yaml`
+- Contains recent movie changes from TMDB
 
-### Commits
-- **Stage changes:**
-  ```bash
-  git add <file>
-  ```
-- **Commit changes:**
-  ```bash
-  git commit -m "Your commit message"
-  ```
-- **Push changes to remote:**
-  ```bash
-  git push origin <branch-name>
-  ```
+## Development
 
-### Good Practices
-- **Commit Messages:** Write clear, descriptive commit messages.
-- **Branch Naming:** Use meaningful branch names (e.g., `feature/add-login`, `bugfix/fix-crash`).
-- **Pull Before Push:** Always pull the latest changes before pushing your work.
-- **Code Review:** Review your changes before committing.
-- **Avoid Committing Sensitive Data:** Never commit API keys, passwords, or other sensitive information.
+### Code Style
+- Follow PEP 8 guidelines
+- Use type hints for better code understanding
+- Document all functions and classes
+
+### Error Handling
+- All API calls include error handling
+- Rate limiting implemented (0.25s between requests)
+- Graceful error recovery and logging
+
+### Testing
+- Use pytest for testing
+- Run tests with:
+```bash
+pytest tests/
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
+
+## License
+
+[Add your license information here]
