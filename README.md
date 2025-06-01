@@ -1,121 +1,75 @@
-# Movie Database ETL Pipeline
+# Movie ETL Pipeline
 
-This project implements an ETL (Extract, Transform, Load) pipeline for movie data, combining information from MovieLens and TMDB APIs.
+This project provides an ETL (Extract, Transform, Load) pipeline for movie data, integrating MovieLens and TMDB datasets.
 
-## Features
+## Overview
 
-- Loads movie data from MovieLens dataset (ml-32m)
-- Enriches data with TMDB API information
-- Handles movie credits, videos, reviews, keywords, release dates, content ratings, and watch providers
-- Supports incremental updates and specific movie updates
-- Excludes adult content
-- Comprehensive error handling and logging
-
-## Prerequisites
-
-- Python 3.8+
-- MySQL 8.0+
-- TMDB API key
+- **Initial Load**: Loads all MovieLens data into the database without TMDB enrichment.
+- **Missing Movies**: Fetches movies from TMDB that are not present in the current dataset, optionally after a specific date.
+- **Change Tracking**: Processes recent movie changes from TMDB.
 
 ## Setup
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd <repository-name>
-```
-
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Download the MovieLens dataset:
-   - Go to [MovieLens Datasets](https://grouplens.org/datasets/movielens/)
-   - Download the "MovieLens 32M" dataset (ml-32m.zip)
-   - Extract the zip file to the project root directory
-   - The extracted directory should be named `ml-32m` and contain:
-     - movies.csv
-     - ratings.csv
-     - tags.csv
-     - links.csv
-
-5. Create a `.env` file in the project root with your database and TMDB API credentials:
-```env
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=your_username
-DB_PASSWORD=your_password
-DB_NAME=your_database_name
-TMDB_API_KEY=your_tmdb_api_key
-```
+1. **Environment**: Ensure you have Python 3.8+ installed.
+2. **Dependencies**: Install required packages using `pip install -r requirements.txt`.
+3. **Configuration**: Update `config/config.yaml` with your TMDB API key and database credentials.
 
 ## Usage
 
 ### Initial Load
 
-To perform the initial load of movie data:
+To perform the initial load of MovieLens data:
 
 ```bash
 python -m src.etl.movie_etl init
 ```
 
-Optional arguments:
-- `--start-year`: Year to start loading from (default: 1900)
-- `--end-year`: Year to end loading at (default: current year)
+### Missing Movies
 
-Example:
+To fetch missing movies from TMDB after the latest movie in the database:
+
 ```bash
-python -m src.etl.movie_etl init --start-year 2000 --end-year 2024
+python -m src.etl.movie_etl missing
 ```
 
 ### Process Recent Changes
 
-To process recent movie changes:
+To process recent movie changes from TMDB:
 
 ```bash
-python -m src.etl.movie_etl changes
+python -m src.etl.movie_etl changes --days 1
 ```
 
-Optional arguments:
-- `--days`: Number of days to look back for changes (default: 1)
+### Update a Specific Movie
 
-Example:
-```bash
-python -m src.etl.movie_etl changes --days 7
-```
-
-### Update Specific Movie
-
-To update a specific movie:
+To update a specific movie by its TMDB ID:
 
 ```bash
 python -m src.etl.movie_etl update <tmdb_id>
 ```
 
-Example:
-```bash
-python -m src.etl.movie_etl update 550
-```
-
 ### Clear Database
 
-To clear all data from the database:
+To clear all data from the database (use with caution):
 
-```bash
-python -m src.etl.movie_etl clear
-```
-
-Add `--force` to skip confirmation:
 ```bash
 python -m src.etl.movie_etl clear --force
 ```
+
+## Project Structure
+
+- `src/etl/movie_etl.py`: Main ETL pipeline logic.
+- `src/data/movielens_loader.py`: Handles loading MovieLens data.
+- `src/api/tmdb_client.py`: Manages TMDB API interactions.
+- `src/database/db_manager.py`: Database operations and models.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Data Sources
 
@@ -158,10 +112,6 @@ python -m src.etl.movie_etl clear --force
 ├── requirements.txt       # Python dependencies
 └── README.md             # This file
 ```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
