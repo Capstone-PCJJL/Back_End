@@ -25,3 +25,5 @@ Thumbs.db
 data/raw/
 data/processed/
 *.log
+ml-32m
+data
