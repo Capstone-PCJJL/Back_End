@@ -1,71 +1,245 @@
-# Movie ETL Pipeline
+# Movie Data ETL System
 
-This project provides an ETL (Extract, Transform, Load) pipeline for movie data, integrating MovieLens and TMDB datasets.
+A robust ETL (Extract, Transform, Load) system for movie data, combining information from MovieLens and TMDB (The Movie Database) APIs.
 
-## Overview
+## Features
 
-- **Initial Load**: Loads all MovieLens data into the database without TMDB enrichment.
-- **Missing Movies**: Fetches movies from TMDB that are not present in the current dataset, optionally after a specific date.
-- **Change Tracking**: Processes recent movie changes from TMDB.
+- **Dual Data Source Integration**
+  - MovieLens dataset integration
+  - TMDB API integration with automatic updates
+  - Intelligent data merging and conflict resolution
 
-## Setup
+- **Robust Data Processing**
+  - YAML-based intermediate storage for data validation
+  - Batch processing for efficient data loading
+  - Automatic genre and relationship management
+  - Comprehensive error handling and logging
+  - Data validation and cleaning
 
-1. **Environment**: Ensure you have Python 3.8+ installed.
-2. **Dependencies**: Install required packages using `pip install -r requirements.txt`.
-3. **Configuration**: Update `config/config.yaml` with your TMDB API key and database credentials.
+- **Database Management**
+  - MySQL database integration
+  - Automatic schema management
+  - Efficient bulk operations
+  - Relationship tracking and updates
+
+## Prerequisites
+
+- Python 3.11+
+- MySQL 8.0+
+- TMDB API key
+- MovieLens dataset
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd Back_End
+```
+
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Set up environment variables:
+Create a `.env` file in the project root with the following variables:
+```env
+TMDB_API_KEY=your_tmdb_api_key
+SQL_HOST=localhost
+SQL_PORT=3306
+SQL_USER=your_db_user
+SQL_PASS=your_db_password
+SQL_DB=your_db_name
+```
 
 ## Usage
 
-### Initial Load
+### Data Processing Workflow
 
-To perform the initial load of MovieLens data:
+The system uses a two-step process for data loading:
 
+1. **Data Extraction and Storage**
+   - Data is fetched from TMDB API
+   - Stored in YAML files for validation and inspection
+   - Organized by batch type (initial, missing, changes)
+
+2. **Data Loading**
+   - YAML files are processed and loaded into the database
+   - Batch processing for efficiency
+   - Error handling and recovery
+   - Data validation against schema
+   - Updates existing records or adds new ones
+
+### Data Validation
+
+The system performs validation at multiple levels:
+
+1. **Schema Validation**
+   - Validates data structure against defined schema
+   - Ensures required fields are present
+   - Checks data types and formats
+
+2. **Data Integrity**
+   - Validates relationships between entities
+   - Ensures referential integrity
+   - Handles duplicate entries appropriately
+
+3. **Batch Processing**
+   - Validates data in batches for efficiency
+   - Continues processing on non-critical errors
+   - Logs validation issues for review
+
+### Table Operations
+
+Different commands handle database tables differently:
+
+1. **Initial Load (`init`)**
+   - Creates tables if they don't exist
+   - Loads MovieLens data directly
+   - Processes TMDB data through YAML files
+
+2. **Missing Movies (`missing`)**
+   - Updates existing movies
+   - Adds new movies
+   - Maintains relationships
+   - Does NOT clear or drop tables
+
+3. **Recent Changes (`changes`)**
+   - Updates existing movies
+   - Adds new movies
+   - Maintains relationships
+   - Does NOT clear or drop tables
+
+4. **Clear Database (`clear`)**
+   - Requires explicit `--force` flag
+   - Removes all data while keeping structure
+   - Requires user confirmation
+
+### Initial Data Load
+
+The initial data load process consists of three steps:
+
+1. **Load MovieLens Data**
+   ```bash
+   # This loads the MovieLens CSV data directly into the database
+   python -m src.etl.movie_etl init --load-movielens
+   ```
+
+2. **Fetch TMDB Data**
+   ```bash
+   # This fetches TMDB data from the latest MovieLens date to present
+   # The script automatically determines the start date based on the latest MovieLens movie
+   python -m src.etl.movie_etl init --fetch-tmdb
+   ```
+
+3. **Process TMDB Data**
+   ```bash
+   # This processes the YAML files containing TMDB data and loads them into the database
+   python -m src.etl.yaml_processor --batch-type initial
+   ```
+
+Alternatively, you can run all steps in sequence:
 ```bash
-python -m src.etl.movie_etl init
+# This will execute all three steps in order
+python -m src.etl.movie_etl init --full
 ```
 
-### Missing Movies
+For custom year ranges in TMDB data:
+```bash
+# Specify custom year range for TMDB data
+python -m src.etl.movie_etl init --fetch-tmdb --start-year 2020 --end-year 2023
+```
 
-To fetch missing movies from TMDB after the latest movie in the database:
+### Incremental Updates
+
+To update the database with new movies from TMDB:
 
 ```bash
-python -m src.etl.movie_etl missing
+# Step 1: Extract and store new movies
+python -m src.etl.movie_etl missing --after-date 2023-01-01
+
+# Step 2: Process YAML files and load into database
+python -m src.etl.yaml_processor --batch-type missing
 ```
 
 ### Process Recent Changes
 
-To process recent movie changes from TMDB:
+To process recent movie changes:
 
 ```bash
+# Step 1: Extract and store changes
 python -m src.etl.movie_etl changes --days 1
+
+# Step 2: Process YAML files and load into database
+python -m src.etl.yaml_processor --batch-type changes
 ```
 
-### Update a Specific Movie
+### Process Specific YAML File
 
-To update a specific movie by its TMDB ID:
-
-```bash
-python -m src.etl.movie_etl update <tmdb_id>
-```
-
-### Clear Database
-
-To clear all data from the database (use with caution):
+To process a specific YAML file:
 
 ```bash
-python -m src.etl.movie_etl clear --force
+python -m src.etl.yaml_processor --file data/movies/raw/initial_2023_20240101_120000.yaml
 ```
 
 ## Project Structure
 
-- `src/etl/movie_etl.py`: Main ETL pipeline logic.
-- `src/data/movielens_loader.py`: Handles loading MovieLens data.
-- `src/api/tmdb_client.py`: Manages TMDB API interactions.
-- `src/database/db_manager.py`: Database operations and models.
+```
+src/
+├── api/
+│   ├── tmdb_client.py      # TMDB API integration
+│   └── movielens_client.py # MovieLens data handling
+├── database/
+│   └── db_manager.py       # Database operations
+├── etl/
+│   ├── movie_etl.py        # Main ETL process
+│   └── yaml_processor.py   # YAML file processing
+└── utils/
+    └── yaml_handler.py     # YAML file operations
+```
+
+## Data Model
+
+The system maintains the following main entities:
+
+- **Movies**: Core movie information
+- **Genres**: Movie genres
+- **People**: Cast and crew information
+- **Credits**: Movie-people relationships
+- **Keywords**: Movie keywords and tags
+
+## Error Handling
+
+The system includes comprehensive error handling:
+
+- API rate limiting and retry logic
+- Database transaction management
+- Data validation and cleaning
+- Detailed logging for debugging
+- YAML-based error recovery
+
+## Recent Improvements
+
+- YAML-based intermediate storage for better data validation
+- Separated data extraction and loading processes
+- Enhanced error handling and recovery
+- Improved batch processing
+- Better data validation through schema enforcement
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
@@ -84,36 +258,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Includes credits, videos, reviews, keywords
 - Contains release dates, content ratings, and watch providers
 - Used to enrich the MovieLens data
-
-## Project Structure
-
-```
-.
-├── config/                 # Configuration files
-├── data/                   # Data storage
-│   ├── movies/            # Movie data files
-│   └── changes/           # Change tracking files
-├── ml-32m/                # MovieLens dataset
-│   ├── movies.csv
-│   ├── ratings.csv
-│   ├── tags.csv
-│   └── links.csv
-├── src/
-│   ├── api/               # API clients
-│   │   └── tmdb_client.py
-│   ├── data/              # Data loaders
-│   │   └── movielens_loader.py
-│   ├── database/          # Database management
-│   │   └── db_manager.py
-│   └── etl/               # ETL pipeline
-│       └── movie_etl.py
-├── tests/                 # Test files
-├── .env                   # Environment variables
-├── requirements.txt       # Python dependencies
-└── README.md             # This file
-```
-
-## Acknowledgments
-
-- [MovieLens](https://grouplens.org/datasets/movielens/) for the movie dataset
-- [TMDB](https://www.themoviedb.org/) for the movie metadata API

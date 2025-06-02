@@ -17,24 +17,18 @@ class TMDBClient:
         """Initialize the TMDB client with API credentials."""
         load_dotenv()
         self.api_key = os.getenv("API_KEY")
-        self.bearer_token = os.getenv("TMDB_BEARER_TOKEN")
         self.base_url = "https://api.themoviedb.org/3"
-        self.headers = {
-            "accept": "application/json",
-            "Authorization": f"Bearer {self.bearer_token}"
-        }
         
-        if not self.api_key or not self.bearer_token:
-            raise ValueError("TMDB API credentials not found in environment variables")
+        if not self.api_key:
+            raise ValueError("TMDB API key not found in environment variables")
 
-    def _make_request(self, endpoint: str, params: Dict[str, Any] = None, use_api_key: bool = False) -> Dict[str, Any]:
+    def _make_request(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Make a request to the TMDB API.
         
         Args:
             endpoint: API endpoint
             params: Query parameters
-            use_api_key: Whether to use API key authentication
             
         Returns:
             Dict[str, Any]: API response
@@ -42,8 +36,8 @@ class TMDBClient:
         if params is None:
             params = {}
             
-        if use_api_key:
-            params['api_key'] = self.api_key
+        # Always include API key in params
+        params['api_key'] = self.api_key
             
         url = f"{self.base_url}/{endpoint}"
         
@@ -116,27 +110,38 @@ class TMDBClient:
             total_pages = 1
             
             while page <= total_pages:
-                response = self._make_request(
-                    'discover/movie',
-                    params={
-                        'primary_release_year': year,
-                        'page': page,
-                        'sort_by': 'popularity.desc',
-                        'include_adult': False,  # Exclude adult content
-                        'language': 'en-US'  # English language
-                    }
-                )
-                
-                if not response:
-                    break
+                try:
+                    response = self._make_request(
+                        'discover/movie',
+                        params={
+                            'primary_release_year': year,
+                            'page': page,
+                            'sort_by': 'popularity.desc',
+                            'include_adult': False,  # Exclude adult content
+                            'language': 'en-US'  # English language
+                        }
+                    )
                     
-                movies.extend(response.get('results', []))
-                total_pages = response.get('total_pages', 1)
-                page += 1
-                
-                # Rate limiting
-                time.sleep(0.25)
-            
+                    if not response:
+                        break
+                        
+                    movies.extend(response.get('results', []))
+                    total_pages = min(response.get('total_pages', 1), 500)  # TMDB API max is 500 pages
+                    page += 1
+                    
+                    # Rate limiting
+                    time.sleep(0.25)
+                    
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 400 and page > 500:
+                        # We've hit the page limit, break gracefully
+                        logger.info(f"Reached maximum page limit (500) for year {year}")
+                        break
+                    else:
+                        # Re-raise if it's a different error
+                        raise
+                    
+            logger.info(f"Retrieved {len(movies)} movies for year {year}")
             return movies
             
         except Exception as e:
@@ -157,7 +162,7 @@ class TMDBClient:
         params = {}
         if append_to_response:
             params["append_to_response"] = append_to_response
-        return self._make_request(f"movie/{movie_id}", params, use_api_key=True)
+        return self._make_request(f"movie/{movie_id}", params)
 
     def get_movie_changes(self, start_date: str = None, end_date: str = None, page: int = 1) -> Dict:
         """
@@ -209,7 +214,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/credits", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/credits")
 
     def get_movie_videos(self, movie_id: int) -> Dict:
         """
@@ -221,7 +226,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/videos", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/videos")
 
     def get_movie_reviews(self, movie_id: int, page: int = 1) -> Dict:
         """
@@ -235,7 +240,7 @@ class TMDBClient:
             Dict: JSON response from the API
         """
         params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/reviews", params, use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/reviews")
 
     def get_movie_recommendations(self, movie_id: int, page: int = 1) -> Dict:
         """
@@ -249,7 +254,7 @@ class TMDBClient:
             Dict: JSON response from the API
         """
         params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/recommendations", params, use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/recommendations")
 
     def get_movie_similar(self, movie_id: int, page: int = 1) -> Dict:
         """
@@ -263,7 +268,7 @@ class TMDBClient:
             Dict: JSON response from the API
         """
         params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/similar", params, use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/similar")
 
     def get_movie_keywords(self, movie_id: int) -> Dict:
         """
@@ -275,7 +280,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/keywords", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/keywords")
 
     def get_movie_external_ids(self, movie_id: int) -> Dict:
         """
@@ -287,7 +292,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/external_ids", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/external_ids")
 
     def get_movie_watch_providers(self, movie_id: int) -> Dict:
         """
@@ -299,7 +304,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/watch/providers", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/watch/providers")
 
     def get_movie_translations(self, movie_id: int) -> Dict:
         """
@@ -311,7 +316,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/translations", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/translations")
 
     def get_movie_lists(self, movie_id: int, page: int = 1) -> Dict:
         """
@@ -325,7 +330,7 @@ class TMDBClient:
             Dict: JSON response from the API
         """
         params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/lists", params, use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/lists")
 
     def get_movie_release_dates(self, movie_id: int) -> Dict:
         """
@@ -337,7 +342,7 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/release_dates", use_api_key=True)
+        return self._make_request(f"movie/{movie_id}/release_dates")
 
     def get_movie_content_ratings(self, movie_id: int) -> Dict:
         """
@@ -349,4 +354,4 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/content_ratings", use_api_key=True) 
+        return self._make_request(f"movie/{movie_id}/content_ratings") 

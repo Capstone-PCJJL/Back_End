@@ -11,10 +11,13 @@ import concurrent.futures
 from functools import partial
 import json
 import math
+from sqlalchemy import text
+import pandas as pd
 
 from src.api.tmdb_client import TMDBClient
 from src.data.movielens_loader import MovieLensLoader
 from src.database.db_manager import DatabaseManager
+from src.utils.yaml_handler import YAMLHandler
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -109,7 +112,21 @@ class MovieETL:
                 # Clean tags data - remove None/NaN values and convert to list of strings
                 tags = movie_data.get('tags', [])
                 if isinstance(tags, list):
-                    tags = [str(tag) for tag in tags if tag is not None and not (isinstance(tag, float) and math.isnan(tag))]
+                    # Clean and sanitize tags
+                    cleaned_tags = []
+                    for tag in tags:
+                        if tag is not None and not (isinstance(tag, float) and math.isnan(tag)):
+                            # Convert to string and clean
+                            tag_str = str(tag).strip()
+                            if tag_str:
+                                # Remove any problematic characters
+                                tag_str = tag_str.replace('\u0000', '')  # Remove null bytes
+                                tag_str = tag_str.replace('\u2028', '')  # Remove line separators
+                                tag_str = tag_str.replace('\u2029', '')  # Remove paragraph separators
+                                # Escape single quotes and backslashes
+                                tag_str = tag_str.replace('\\', '\\\\').replace("'", "\\'")
+                                cleaned_tags.append(tag_str)
+                    tags = cleaned_tags
                 else:
                     tags = []
 
@@ -467,141 +484,64 @@ class MovieETL:
         finally:
             session.close()
 
-    def initial_load(self, start_year: int = 1900, end_year: int = 2025):
-        """Load all MovieLens data without TMDB enrichment."""
+    def initial_load(self, start_year: int = None, end_year: int = None) -> None:
+        """
+        Perform initial data load from MovieLens and TMDB.
+        
+        Args:
+            start_year: Optional start year for TMDB data
+            end_year: Optional end year for TMDB data
+        """
         try:
             # Load MovieLens data
+            logger.info("Loading MovieLens data...")
             self.movielens_loader.load_data()
             
-            # Process movies in batches
-            batch_size = 500
-            total_movies = len(self.movielens_loader.movies_df)
-            total_batches = (total_movies + batch_size - 1) // batch_size
-
-            for batch_num in range(total_batches):
-                start_idx = batch_num * batch_size
-                end_idx = min((batch_num + 1) * batch_size, total_movies)
-                batch_movies = self.movielens_loader.movies_df.iloc[start_idx:end_idx]
-
-                session = self.db_manager.Session()
-                try:
-                    for _, movie_row in batch_movies.iterrows():
-                        try:
-                            # Get full movie data including ratings and tags
-                            movie_data = self.movielens_loader.get_movie_data(movie_row['movieId'])
-                            if not movie_data or not movie_data.get('tmdbId'):
-                                continue  # Skip movies without TMDB IDs
-
-                            # Create movie object
-                            movie_obj = self.db_manager.Movie(
-                                tmdb_id=movie_data['tmdbId'],
-                                movielens_id=movie_data['movieId'],
-                                title=movie_data['title'],
-                                movielens_rating=movie_data['average_rating'],
-                                movielens_num_ratings=movie_data['num_ratings'],
-                                movielens_tags=json.dumps(movie_data['tags'])
-                            )
-                            session.add(movie_obj)
-                            session.flush()  # Ensure movie_obj.id is available
-
-                            # Add genres using MovieGenre association object
-                            for genre_name in movie_data['genres']:
-                                if genre_name == '(no genres listed)':
-                                    continue
-                                genre = session.query(self.db_manager.Genre).filter_by(name=genre_name).first()
-                                if not genre:
-                                    genre = self.db_manager.Genre(name=genre_name)
-                                    session.add(genre)
-                                    session.flush()
-                                movie_genre = self.db_manager.MovieGenre(movie_id=movie_obj.id, genre_id=genre.id)
-                                session.add(movie_genre)
-
-                        except Exception as e:
-                            logging.error(f"Error processing movieId {movie_row['movieId']}: {str(e)}")
-                            logging.error(f"Movie data that caused error: {movie_data if 'movie_data' in locals() else 'N/A'}")
-                            continue
-
-                    # Commit the batch
-                    session.commit()
-                    logging.info(f"Processed batch {batch_num + 1}/{total_batches}")
-
-                except Exception as e:
-                    session.rollback()
-                    logging.error(f"Error processing batch {batch_num + 1}: {str(e)}")
-                    continue
-                finally:
-                    session.close()
-
-            logging.info("Initial load completed successfully")
-
+            # Get TMDB data
+            logger.info("Getting recent movies from TMDB...")
+            latest_date = self.db_manager.get_latest_release_date()
+            if not latest_date:
+                latest_date = datetime(2023, 1, 1)
+                logger.info(f"No release date found in database, using default date: {latest_date.date()}")
+            
+            logger.info(f"Getting movies from {latest_date.date()} to present")
+            
+            # Process by year
+            current_year = datetime.now().year
+            for year in range(start_year or latest_date.year, end_year or current_year + 1):
+                logger.info(f"Fetching movies for year {year}")
+                movies = self.tmdb_client.get_movies_by_year(year)
+                
+                # Save to YAML
+                yaml_handler = YAMLHandler()
+                filepath = yaml_handler.save_movie_batch(movies, 'initial', str(year))
+                logger.info(f"Saved {len(movies)} movies for {year} to {filepath}")
+            
+            logger.info("Use yaml_processor.py to load the movies into the database")
+            
         except Exception as e:
-            logging.error(f"Error during initial load: {str(e)}")
+            logger.error(f"Error in initial load: {str(e)}")
             raise
 
-    def get_missing_movies(self, start_year: int = 1900, end_year: int = None, after_date: Optional[datetime] = None) -> None:
+    def process_missing_movies(self, after_date: str = None) -> None:
         """
-        Get all movies from TMDB that are not in the current dataset, optionally after a specific date.
+        Process movies that are in TMDB but not in the database.
+        
+        Args:
+            after_date: Optional date to filter movies after
         """
         try:
-            # Get all movies from TMDB
-            logger.info("Fetching all movies from TMDB...")
-            if after_date:
-                # Fetch by year, then filter by date
-                tmdb_movies = []
-                for year in range(after_date.year, (end_year or datetime.now().year) + 1):
-                    logger.info(f"Fetching movies for year {year}")
-                    movies = self.tmdb_client.get_movies_by_year(year)
-                    for m in movies:
-                        rd = m.get('release_date')
-                        if rd:
-                            try:
-                                d = datetime.strptime(rd, '%Y-%m-%d')
-                                if d > after_date:
-                                    tmdb_movies.append(m)
-                            except Exception:
-                                continue
-                logger.info(f"Found {len(tmdb_movies)} movies in TMDB after {after_date.date()}")
-            else:
-                tmdb_movies = self.tmdb_client.get_all_movies(start_year, end_year)
-                logger.info(f"Found {len(tmdb_movies)} movies in TMDB")
-
-            # Get all movies from our database
-            session = self.db_manager.Session()
-            try:
-                db_movies = session.query(self.db_manager.Movie).all()
-                db_tmdb_ids = {movie.tmdb_id for movie in db_movies}
-                logger.info(f"Found {len(db_tmdb_ids)} movies in database")
-                missing_movies = [movie for movie in tmdb_movies if movie['id'] not in db_tmdb_ids]
-                logger.info(f"Found {len(missing_movies)} missing movies")
-                batch_size = 200
-                for i in range(0, len(missing_movies), batch_size):
-                    batch = missing_movies[i:i + batch_size]
-                    logger.info(f"Processing batch {i//batch_size + 1}/{(len(missing_movies) + batch_size - 1)//batch_size}")
-                    movie_data_batch = []
-                    for movie in batch:
-                        movie_data = {
-                            'tmdbId': movie['id'],
-                            'title': movie['title'],
-                            'original_title': movie.get('original_title'),
-                            'release_date': movie.get('release_date'),
-                            'overview': movie.get('overview'),
-                            'poster_path': movie.get('poster_path'),
-                            'backdrop_path': movie.get('backdrop_path'),
-                            'adult': movie.get('adult', False),
-                            'original_language': movie.get('original_language'),
-                            'popularity': movie.get('popularity'),
-                            'vote_average': movie.get('vote_average'),
-                            'vote_count': movie.get('vote_count')
-                        }
-                        movie_data_batch.append(movie_data)
-                    enriched_batch = self._enrich_movie_batch(movie_data_batch)
-                    for movie_data in enriched_batch:
-                        if movie_data:
-                            self.db_manager.load_movie_data(movie_data)
-                    logger.info(f"Processed {min(i + batch_size, len(missing_movies))}/{len(missing_movies)} missing movies")
-            finally:
-                session.close()
-            logger.info("✅ Missing movies process completed successfully")
+            # Get movies from TMDB
+            movies = self.tmdb_client.get_movies_after_date(after_date)
+            logger.info(f"Found {len(movies)} movies in TMDB after {after_date}")
+            
+            # Save to YAML
+            yaml_handler = YAMLHandler()
+            filepath = yaml_handler.save_movie_batch(movies, 'missing', datetime.now().strftime("%Y%m%d"))
+            logger.info(f"Saved movies to {filepath}")
+            
+            logger.info("Use yaml_processor.py to load the movies into the database")
+            
         except Exception as e:
             logger.error(f"Error processing missing movies: {str(e)}")
             raise
@@ -611,41 +551,19 @@ class MovieETL:
         Process recent movie changes.
         
         Args:
-            days: Number of days to look back for changes
+            days: Number of days to look back
         """
         try:
-            # Get changes from TMDB API
-            changes = self.tmdb_client.get_movie_changes(days=days)
+            # Get changes from TMDB
+            changes = self.tmdb_client.get_recent_changes(days)
+            logger.info(f"Found {len(changes)} changes in the last {days} days")
             
-            # Process each change
-            for change in changes:
-                try:
-                    # Get the latest movie data
-                    movie_data = self._enrich_movie_batch([{'tmdbId': change['id']}])[0]
-                    
-                    if not movie_data:  # Skip if None (adult content)
-                        continue
-                    
-                    # Update in database
-                    self.db_manager.load_movie_data(movie_data)
-                    
-                    # Get the movie ID from our database
-                    db_movie = self.db_manager.get_movie_by_tmdb_id(change['id'])
-                    if db_movie:
-                        # Process additional data
-                        self._process_credits(db_movie.id, movie_data.get('credits', {}))
-                        self._process_videos(db_movie.id, movie_data.get('videos', {}))
-                        self._process_reviews(db_movie.id, movie_data.get('reviews', {}))
-                        self._process_keywords(db_movie.id, movie_data.get('keywords', {}))
-                        self._process_release_dates(db_movie.id, movie_data.get('release_dates', {}))
-                        self._process_content_ratings(db_movie.id, movie_data.get('content_ratings', {}))
-                        self._process_watch_providers(db_movie.id, movie_data.get('watch_providers', {}))
-                    
-                except Exception as e:
-                    logger.error(f"Error processing change for movie {change.get('id', 'Unknown')}: {str(e)}")
-                    continue
+            # Save to YAML
+            yaml_handler = YAMLHandler()
+            filepath = yaml_handler.save_movie_batch(changes, 'changes', datetime.now().strftime("%Y%m%d"))
+            logger.info(f"Saved changes to {filepath}")
             
-            logger.info(f"✅ Processed {len(changes)} movie changes")
+            logger.info("Use yaml_processor.py to load the changes into the database")
             
         except Exception as e:
             logger.error(f"Error processing changes: {str(e)}")
@@ -664,6 +582,35 @@ class MovieETL:
             
             if not movie_data:  # Skip if None (adult content)
                 return
+
+            # Check if movie already exists
+            session = self.db_manager.Session()
+            try:
+                existing_movie = session.query(self.db_manager.Movie).filter_by(tmdb_id=tmdb_id).first()
+                if existing_movie:
+                    logging.info(f"Movie '{movie_data.get('title', 'Unknown')}' already exists in database.")
+                    return
+            finally:
+                session.close()
+
+            # Show movie details and ask for confirmation
+            print("\nMovie Details:")
+            print(f"Title: {movie_data.get('title', 'Unknown')}")
+            print(f"Original Title: {movie_data.get('original_title', 'Unknown')}")
+            print(f"Release Date: {movie_data.get('release_date', 'Unknown')}")
+            print(f"Overview: {movie_data.get('overview', 'No overview available')[:200]}...")
+            print(f"Genres: {', '.join(genre['name'] for genre in movie_data.get('genres', []))}")
+            
+            # Ask for confirmation
+            while True:
+                confirm = input("\nDo you want to add this movie to the database? (y/n): ").lower()
+                if confirm in ['y', 'n']:
+                    break
+                print("Please enter 'y' for yes or 'n' for no.")
+            
+            if confirm != 'y':
+                logging.info("Movie addition cancelled by user.")
+                return
             
             # Update in database
             self.db_manager.load_movie_data(movie_data)
@@ -680,10 +627,10 @@ class MovieETL:
                 self._process_content_ratings(db_movie.id, movie_data.get('content_ratings', {}))
                 self._process_watch_providers(db_movie.id, movie_data.get('watch_providers', {}))
             
-            logger.info(f"✅ Updated movie {movie_data.get('title', 'Unknown')}")
+            logging.info(f"✅ Added movie {movie_data.get('title', 'Unknown')}")
             
         except Exception as e:
-            logger.error(f"Error updating movie {tmdb_id}: {str(e)}")
+            logging.error(f"Error updating movie {tmdb_id}: {str(e)}")
             raise
 
     def clear_database(self) -> None:
@@ -711,6 +658,12 @@ def main():
                            help='Year to start loading from (default: 1900)')
     init_parser.add_argument('--end-year', type=int, default=datetime.now().year,
                            help='Year to end loading at (default: current year)')
+    init_parser.add_argument('--full', action='store_true',
+                           help='Run all steps in sequence (MovieLens load, TMDB fetch, and YAML processing)')
+    init_parser.add_argument('--load-movielens', action='store_true',
+                           help='Load MovieLens data into the database')
+    init_parser.add_argument('--fetch-tmdb', action='store_true',
+                           help='Fetch TMDB data and save to YAML files')
     
     # Update changes command
     changes_parser = subparsers.add_parser('changes', help='Process recent changes')
@@ -747,8 +700,30 @@ def main():
     
     # Execute command
     if args.command == 'init':
-        logger.info(f"Starting initial load from {args.start_year} to {args.end_year}")
-        etl.initial_load(start_year=args.start_year, end_year=args.end_year)
+        if args.full:
+            logger.info("Running full initial load process")
+            # Step 1: Load MovieLens data
+            logger.info("Step 1: Loading MovieLens data...")
+            etl.movielens_loader.load_data()
+            
+            # Step 2: Fetch TMDB data
+            logger.info("Step 2: Fetching TMDB data...")
+            etl.initial_load(start_year=args.start_year, end_year=args.end_year)
+            
+            # Step 3: Process YAML files
+            logger.info("Step 3: Processing YAML files...")
+            from src.etl.yaml_processor import YAMLProcessor
+            processor = YAMLProcessor()
+            processor.process_all_files('initial')
+        else:
+            if args.load_movielens:
+                logger.info("Loading MovieLens data...")
+                etl.movielens_loader.load_data()
+            if args.fetch_tmdb:
+                logger.info(f"Fetching TMDB data from {args.start_year} to {args.end_year}")
+                etl.initial_load(start_year=args.start_year, end_year=args.end_year)
+            if not (args.load_movielens or args.fetch_tmdb):
+                logger.info("No action specified. Use --load-movielens, --fetch-tmdb, or --full")
     elif args.command == 'changes':
         logger.info(f"Processing changes from the last {args.days} days")
         etl.process_changes(days=args.days)
@@ -772,7 +747,7 @@ def main():
             if after_date:
                 logger.info(f"Using after_date {after_date.date()} (after latest movie in DB)")
         logger.info(f"Getting missing movies after {after_date.date() if after_date else 'N/A'} to {args.end_year}")
-        etl.get_missing_movies(after_date=after_date, end_year=args.end_year)
+        etl.process_missing_movies(after_date=after_date, end_year=args.end_year)
     else:
         parser.print_help()
 

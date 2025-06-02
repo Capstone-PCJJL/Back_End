@@ -240,8 +240,13 @@ class DatabaseManager:
         try:
             session = self.Session()
             
-            # Check if movie already exists
-            existing_movie = session.query(self.Movie).filter_by(tmdb_id=movie_data.get('tmdbId')).first()
+            # Get TMDB ID from either field name
+            tmdb_id = movie_data.get('tmdbId') or movie_data.get('tmdb_id')
+            if not tmdb_id:
+                raise ValueError("TMDB ID is required")
+            
+            # Check if movie already exists by TMDB ID
+            existing_movie = session.query(self.Movie).filter_by(tmdb_id=tmdb_id).first()
             
             if existing_movie:
                 # Update existing movie
@@ -259,16 +264,18 @@ class DatabaseManager:
                 existing_movie.popularity = movie_data.get('popularity')
                 existing_movie.vote_average = movie_data.get('vote_average')
                 existing_movie.vote_count = movie_data.get('vote_count')
-                existing_movie.movielens_rating = movie_data.get('average_rating')
-                existing_movie.movielens_num_ratings = movie_data.get('num_ratings')
-                existing_movie.movielens_tags = movie_data.get('tags', [])
+                existing_movie.movielens_rating = movie_data.get('movielens_rating') or movie_data.get('average_rating')
+                existing_movie.movielens_num_ratings = movie_data.get('movielens_num_ratings') or movie_data.get('num_ratings')
+                existing_movie.movielens_tags = movie_data.get('movielens_tags') or movie_data.get('tags', [])
+                existing_movie.updated_at = datetime.utcnow()
                 
                 # Track change
-                self._track_change(existing_movie.id, 'update')
+                self._track_change(session, existing_movie.id, 'update')
             else:
                 # Create new movie
                 movie = self.Movie(
-                    tmdb_id=movie_data.get('tmdbId'),
+                    tmdb_id=tmdb_id,
+                    movielens_id=movie_data.get('movielens_id') or movie_data.get('movieId'),
                     title=movie_data.get('title'),
                     original_title=movie_data.get('original_title'),
                     release_date=movie_data.get('release_date'),
@@ -283,18 +290,22 @@ class DatabaseManager:
                     popularity=movie_data.get('popularity'),
                     vote_average=movie_data.get('vote_average'),
                     vote_count=movie_data.get('vote_count'),
-                    movielens_rating=movie_data.get('average_rating'),
-                    movielens_num_ratings=movie_data.get('num_ratings'),
-                    movielens_tags=movie_data.get('tags', [])
+                    movielens_rating=movie_data.get('movielens_rating') or movie_data.get('average_rating'),
+                    movielens_num_ratings=movie_data.get('movielens_num_ratings') or movie_data.get('num_ratings'),
+                    movielens_tags=movie_data.get('movielens_tags') or movie_data.get('tags', [])
                 )
                 session.add(movie)
                 session.flush()  # Get the movie ID
                 
                 # Track change
-                self._track_change(movie.id, 'create')
+                self._track_change(session, movie.id, 'create')
             
             # Process genres
             if 'genres' in movie_data:
+                # First, remove existing genre associations
+                if existing_movie:
+                    session.query(self.MovieGenre).filter_by(movie_id=existing_movie.id).delete()
+                
                 for genre_name in movie_data['genres']:
                     if genre_name == '(no genres listed)':
                         continue
@@ -306,11 +317,11 @@ class DatabaseManager:
                         session.add(genre)
                         session.flush()
                     
-                    # Create movie-genre relationship if it doesn't exist
-                    if not existing_movie:
-                        movie_genre = self.MovieGenre(movie_id=movie.id, genre_id=genre.id)
-                    else:
-                        movie_genre = self.MovieGenre(movie_id=existing_movie.id, genre_id=genre.id)
+                    # Create movie-genre relationship
+                    movie_genre = self.MovieGenre(
+                        movie_id=existing_movie.id if existing_movie else movie.id,
+                        genre_id=genre.id
+                    )
                     session.add(movie_genre)
             
             session.commit()
@@ -375,18 +386,156 @@ class DatabaseManager:
             logger.error(f"Error getting recent changes: {str(e)}")
             return []
 
-    def _track_change(self, movie_id: int, change_type: str, details: Optional[Dict] = None) -> None:
+    def _track_change(self, session, movie_id: int, change_type: str, details: Optional[Dict] = None) -> None:
         """Track changes made to movies in the database.
         
         Args:
+            session: SQLAlchemy session to use
             movie_id: The ID of the movie that was changed
             change_type: Type of change ('created', 'updated', 'deleted')
             details: Optional dictionary with additional change details
         """
-        change = MovieChange(
+        change = self.MovieChange(
             movie_id=movie_id,
             change_type=change_type,
             details=details
         )
-        self.session.add(change)
-        self.session.commit() 
+        session.add(change)
+        # Do not commit here; commit is handled by the caller 
+
+    def load_movie_data_batch(self, movie_data_list: List[Dict[str, Any]]) -> None:
+        """
+        Load a batch of movie data into the database.
+        
+        Args:
+            movie_data_list: List of movie data dictionaries
+        """
+        session = self.Session()
+        try:
+            # Get all existing movies in bulk
+            tmdb_ids = [movie_data.get('tmdb_id') or movie_data.get('tmdbId') for movie_data in movie_data_list]
+            existing_movies = {
+                movie.tmdb_id: movie 
+                for movie in session.query(self.Movie).filter(self.Movie.tmdb_id.in_(tmdb_ids)).all()
+            }
+            
+            # Prepare bulk insert/update operations
+            movies_to_add = []
+            movies_to_update = []
+            
+            for movie_data in movie_data_list:
+                # Convert release_date string to datetime if present
+                if movie_data.get('release_date'):
+                    try:
+                        movie_data['release_date'] = datetime.strptime(movie_data['release_date'], '%Y-%m-%d')
+                    except ValueError:
+                        movie_data['release_date'] = None
+                
+                # Get TMDB ID from either field name
+                tmdb_id = movie_data.get('tmdb_id') or movie_data.get('tmdbId')
+                if not tmdb_id:
+                    logger.warning(f"Skipping movie without TMDB ID: {movie_data}")
+                    continue
+                
+                # Check if movie exists
+                movie = existing_movies.get(tmdb_id)
+                
+                if movie:
+                    # Update existing movie
+                    for key, value in movie_data.items():
+                        if hasattr(movie, key):
+                            setattr(movie, key, value)
+                    movies_to_update.append(movie)
+                else:
+                    # Create new movie
+                    movie = self.Movie(
+                        tmdb_id=tmdb_id,
+                        movielens_id=movie_data.get('movielens_id') or movie_data.get('movieId'),
+                        title=movie_data.get('title'),
+                        original_title=movie_data.get('original_title'),
+                        release_date=movie_data.get('release_date'),
+                        overview=movie_data.get('overview'),
+                        poster_path=movie_data.get('poster_path'),
+                        backdrop_path=movie_data.get('backdrop_path'),
+                        adult=movie_data.get('adult', False),
+                        original_language=movie_data.get('original_language'),
+                        runtime=movie_data.get('runtime'),
+                        status=movie_data.get('status'),
+                        tagline=movie_data.get('tagline'),
+                        popularity=movie_data.get('popularity'),
+                        vote_average=movie_data.get('vote_average'),
+                        vote_count=movie_data.get('vote_count'),
+                        movielens_rating=movie_data.get('movielens_rating') or movie_data.get('average_rating'),
+                        movielens_num_ratings=movie_data.get('movielens_num_ratings') or movie_data.get('num_ratings'),
+                        movielens_tags=movie_data.get('movielens_tags') or movie_data.get('tags', [])
+                    )
+                    movies_to_add.append(movie)
+            
+            # Bulk save objects
+            if movies_to_add:
+                session.bulk_save_objects(movies_to_add)
+            if movies_to_update:
+                session.bulk_save_objects(movies_to_update)
+            
+            # Process genres in bulk
+            for movie_data in movie_data_list:
+                tmdb_id = movie_data.get('tmdb_id') or movie_data.get('tmdbId')
+                if not tmdb_id:
+                    continue
+                    
+                movie = existing_movies.get(tmdb_id)
+                if not movie:
+                    # Get the newly created movie
+                    movie = session.query(self.Movie).filter_by(tmdb_id=tmdb_id).first()
+                
+                if movie and movie.id:
+                    # Remove existing genre associations
+                    session.query(self.MovieGenre).filter_by(movie_id=movie.id).delete()
+                    
+                    # Process new genres
+                    for genre_name in movie_data.get('genres', []):
+                        if genre_name == '(no genres listed)':
+                            continue
+                            
+                        # Get or create genre
+                        genre = session.query(self.Genre).filter_by(name=genre_name).first()
+                        if not genre:
+                            genre = self.Genre(name=genre_name)
+                            session.add(genre)
+                            session.flush()
+                        
+                        # Create movie-genre relationship
+                        movie_genre = self.MovieGenre(
+                            movie_id=movie.id,
+                            genre_id=genre.id
+                        )
+                        session.add(movie_genre)
+            
+            session.commit()
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error loading movie data batch: {str(e)}")
+            raise
+        finally:
+            session.close()
+
+    def get_latest_release_date(self) -> Optional[datetime]:
+        """
+        Get the most recent release date in the database.
+        
+        Returns:
+            Optional[datetime]: The latest release date found, or None if no movies exist
+        """
+        try:
+            session = self.Session()
+            latest_movie = session.query(self.Movie)\
+                .filter(self.Movie.release_date.isnot(None))\
+                .order_by(self.Movie.release_date.desc())\
+                .first()
+            return latest_movie.release_date if latest_movie else None
+        except Exception as e:
+            logger.error(f"Error getting latest release date: {str(e)}")
+            return None
+        finally:
+            session.close() 
