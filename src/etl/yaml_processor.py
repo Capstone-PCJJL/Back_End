@@ -80,6 +80,64 @@ class YAMLProcessor:
                 # Continue with next file instead of failing completely
                 continue
 
+    def process_yaml_files(self):
+        """Process all unprocessed YAML files."""
+        try:
+            # Get list of unprocessed files
+            unprocessed_files = self.yaml_handler.get_unprocessed_files()
+            logger.info(f"Found {len(unprocessed_files)} unprocessed files")
+            
+            # First, collect all movies from all files
+            all_movies = []
+            for file_path in unprocessed_files:
+                try:
+                    # Load movies from YAML
+                    movies = self.yaml_handler.load_movies(file_path)
+                    logger.info(f"Loaded {len(movies)} movies from {file_path}")
+                    all_movies.extend(movies)
+                except Exception as e:
+                    logger.error(f"Error loading file {file_path}: {str(e)}")
+                    continue
+            
+            logger.info(f"Total movies before deduplication: {len(all_movies)}")
+            
+            # Deduplicate movies by tmdb_id across all files
+            unique_movies = {}
+            for movie in all_movies:
+                tmdb_id = movie.get('tmdb_id')
+                if tmdb_id and tmdb_id not in unique_movies:
+                    unique_movies[tmdb_id] = movie
+            
+            # Convert back to list
+            movies = list(unique_movies.values())
+            logger.info(f"After deduplication: {len(movies)} unique movies")
+            
+            # Process in batches
+            batch_size = 100
+            for i in range(0, len(movies), batch_size):
+                batch = movies[i:i + batch_size]
+                batch_num = (i // batch_size) + 1
+                total_batches = (len(movies) + batch_size - 1) // batch_size
+                logger.info(f"Processing batch {batch_num}/{total_batches}")
+                
+                try:
+                    self.db_manager.load_movie_data_batch(batch)
+                except Exception as e:
+                    logger.error(f"Error processing batch {batch_num}: {str(e)}")
+                    continue
+            
+            # Mark all files as processed
+            for file_path in unprocessed_files:
+                try:
+                    self.yaml_handler.mark_as_processed(file_path)
+                except Exception as e:
+                    logger.error(f"Error marking file {file_path} as processed: {str(e)}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error in process_yaml_files: {str(e)}")
+            raise
+
 def main():
     """Main entry point for the YAML processor."""
     parser = argparse.ArgumentParser(description='Process YAML files and load them into the database')

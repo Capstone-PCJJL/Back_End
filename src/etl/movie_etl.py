@@ -493,10 +493,6 @@ class MovieETL:
             end_year: Optional end year for TMDB data
         """
         try:
-            # Load MovieLens data
-            logger.info("Loading MovieLens data...")
-            self.movielens_loader.load_data()
-            
             # Get TMDB data
             logger.info("Getting recent movies from TMDB...")
             latest_date = self.db_manager.get_latest_release_date()
@@ -654,8 +650,8 @@ def main():
     
     # Initial load command
     init_parser = subparsers.add_parser('init', help='Perform initial data load')
-    init_parser.add_argument('--start-year', type=int, default=1900,
-                           help='Year to start loading from (default: 1900)')
+    init_parser.add_argument('--start-year', type=int, default=2023,
+                           help='Year to start loading from (default: 2023)')
     init_parser.add_argument('--end-year', type=int, default=datetime.now().year,
                            help='Year to end loading at (default: current year)')
     init_parser.add_argument('--full', action='store_true',

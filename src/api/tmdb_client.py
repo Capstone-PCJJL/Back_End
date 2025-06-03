@@ -108,6 +108,7 @@ class TMDBClient:
             movies = []
             page = 1
             total_pages = 1
+            seen_ids = set()  # Track seen movie IDs
             
             while page <= total_pages:
                 try:
@@ -125,7 +126,14 @@ class TMDBClient:
                     if not response:
                         break
                         
-                    movies.extend(response.get('results', []))
+                    # Format the movie data to include tmdb_id and deduplicate
+                    for movie in response.get('results', []):
+                        movie_id = movie['id']
+                        if movie_id not in seen_ids:
+                            movie['tmdb_id'] = movie.pop('id')  # Rename id to tmdb_id
+                            movies.append(movie)
+                            seen_ids.add(movie_id)
+                    
                     total_pages = min(response.get('total_pages', 1), 500)  # TMDB API max is 500 pages
                     page += 1
                     
@@ -141,7 +149,7 @@ class TMDBClient:
                         # Re-raise if it's a different error
                         raise
                     
-            logger.info(f"Retrieved {len(movies)} movies for year {year}")
+            logger.info(f"Retrieved {len(movies)} unique movies for year {year}")
             return movies
             
         except Exception as e:
