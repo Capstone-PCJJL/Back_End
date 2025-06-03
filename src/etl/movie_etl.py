@@ -15,7 +15,7 @@ from sqlalchemy import text
 import pandas as pd
 
 from src.api.tmdb_client import TMDBClient
-from src.data.movielens_loader import MovieLensLoader
+from src.movielens.movielens_loader import MovieLensLoader
 from src.database.db_manager import DatabaseManager
 from src.utils.yaml_handler import YAMLHandler
 
