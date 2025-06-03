@@ -146,7 +146,7 @@ class MovieLensLoader:
                 'genres': genres,
                 'average_rating': ratings_stats['average_rating'],
                 'num_ratings': ratings_stats['num_ratings'],
-                'tags': tags
+                'tags': [tag for tag in tags if isinstance(tag, str) and tag.strip()]
             }
             
         except (IndexError, KeyError):

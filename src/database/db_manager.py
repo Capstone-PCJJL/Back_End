@@ -414,16 +414,28 @@ class DatabaseManager:
         try:
             # Get all existing movies in bulk
             tmdb_ids = [movie_data.get('tmdb_id') or movie_data.get('tmdbId') for movie_data in movie_data_list]
+    
             existing_movies = {
                 movie.tmdb_id: movie 
                 for movie in session.query(self.Movie).filter(self.Movie.tmdb_id.in_(tmdb_ids)).all()
             }
-            
+
             # Prepare bulk insert/update operations
             movies_to_add = []
             movies_to_update = []
             
             for movie_data in movie_data_list:
+                # Get TMDB ID from either field name
+                tmdb_id = movie_data.get('tmdb_id') or movie_data.get('tmdbId')
+                if not tmdb_id:
+                    logger.warning(f"Skipping movie without TMDB ID: {movie_data}")
+                    continue
+
+                # Skip if movie already exists
+                if tmdb_id in existing_movies:
+                    logger.info(f"Movie with TMDB ID {tmdb_id} already exists, skipping...")
+                    continue
+
                 # Convert release_date string to datetime if present
                 if movie_data.get('release_date'):
                     try:
@@ -431,64 +443,43 @@ class DatabaseManager:
                     except ValueError:
                         movie_data['release_date'] = None
                 
-                # Get TMDB ID from either field name
-                tmdb_id = movie_data.get('tmdb_id') or movie_data.get('tmdbId')
-                if not tmdb_id:
-                    logger.warning(f"Skipping movie without TMDB ID: {movie_data}")
-                    continue
-                
-                # Check if movie exists
-                movie = existing_movies.get(tmdb_id)
-                
-                if movie:
-                    # Update existing movie
-                    for key, value in movie_data.items():
-                        if hasattr(movie, key):
-                            setattr(movie, key, value)
-                    movies_to_update.append(movie)
-                else:
-                    # Create new movie
-                    movie = self.Movie(
-                        tmdb_id=tmdb_id,
-                        movielens_id=movie_data.get('movielens_id') or movie_data.get('movieId'),
-                        title=movie_data.get('title'),
-                        original_title=movie_data.get('original_title'),
-                        release_date=movie_data.get('release_date'),
-                        overview=movie_data.get('overview'),
-                        poster_path=movie_data.get('poster_path'),
-                        backdrop_path=movie_data.get('backdrop_path'),
-                        adult=movie_data.get('adult', False),
-                        original_language=movie_data.get('original_language'),
-                        runtime=movie_data.get('runtime'),
-                        status=movie_data.get('status'),
-                        tagline=movie_data.get('tagline'),
-                        popularity=movie_data.get('popularity'),
-                        vote_average=movie_data.get('vote_average'),
-                        vote_count=movie_data.get('vote_count'),
-                        movielens_rating=movie_data.get('movielens_rating') or movie_data.get('average_rating'),
-                        movielens_num_ratings=movie_data.get('movielens_num_ratings') or movie_data.get('num_ratings'),
-                        movielens_tags=movie_data.get('movielens_tags') or movie_data.get('tags', [])
-                    )
-                    movies_to_add.append(movie)
+                # Create new movie
+                movie = self.Movie(
+                    tmdb_id=tmdb_id,
+                    movielens_id=movie_data.get('movielens_id') or movie_data.get('movieId'),
+                    title=movie_data.get('title'),
+                    original_title=movie_data.get('original_title'),
+                    release_date=movie_data.get('release_date'),
+                    overview=movie_data.get('overview'),
+                    poster_path=movie_data.get('poster_path'),
+                    backdrop_path=movie_data.get('backdrop_path'),
+                    adult=movie_data.get('adult', False),
+                    original_language=movie_data.get('original_language'),
+                    runtime=movie_data.get('runtime'),
+                    status=movie_data.get('status'),
+                    tagline=movie_data.get('tagline'),
+                    popularity=movie_data.get('popularity'),
+                    vote_average=movie_data.get('vote_average'),
+                    vote_count=movie_data.get('vote_count'),
+                    movielens_rating=movie_data.get('movielens_rating') or movie_data.get('average_rating'),
+                    movielens_num_ratings=movie_data.get('movielens_num_ratings') or movie_data.get('num_ratings'),
+                    movielens_tags=movie_data.get('movielens_tags') or movie_data.get('tags', [])
+                )
+                movies_to_add.append(movie)
             
             # Bulk save objects
             if movies_to_add:
                 session.bulk_save_objects(movies_to_add)
-            if movies_to_update:
-                session.bulk_save_objects(movies_to_update)
             
             # Process genres in bulk
             for movie_data in movie_data_list:
                 tmdb_id = movie_data.get('tmdb_id') or movie_data.get('tmdbId')
-                if not tmdb_id:
+                if not tmdb_id or tmdb_id in existing_movies:
                     continue
                     
-                movie = existing_movies.get(tmdb_id)
-                if not movie:
-                    # Get the newly created movie
-                    movie = session.query(self.Movie).filter_by(tmdb_id=tmdb_id).first()
+                movie = session.query(self.Movie).filter_by(tmdb_id=tmdb_id).first()
                 
-                if movie and movie.id:
+                if movie and movie.id and 'genres' in movie_data:
                     # Remove existing genre associations
                     session.query(self.MovieGenre).filter_by(movie_id=movie.id).delete()
                     
