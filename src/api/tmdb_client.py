@@ -362,4 +362,88 @@ class TMDBClient:
         Returns:
             Dict: JSON response from the API
         """
-        return self._make_request(f"movie/{movie_id}/content_ratings") 
+        return self._make_request(f"movie/{movie_id}/content_ratings")
+
+    def get_recent_changes(self, days: int = 1) -> List[Dict[str, Any]]:
+        """
+        Get recent movie changes from TMDB.
+        
+        Args:
+            days: Number of days to look back for changes
+            
+        Returns:
+            List[Dict[str, Any]]: List of changed movie data
+        """
+        try:
+            # Calculate start and end dates
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=days)
+            
+            # Format dates for API
+            start_date_str = start_date.strftime("%Y-%m-%d")
+            end_date_str = end_date.strftime("%Y-%m-%d")
+            
+            logger.info(f"Fetching changes from {start_date_str} to {end_date_str}")
+            
+            # Get changes from TMDB
+            changes_response = self.get_movie_changes(start_date=start_date_str, end_date=end_date_str)
+            if not changes_response:
+                return []
+            
+            # Get all changed movie IDs
+            changed_movie_ids = set()
+            for change in changes_response.get('results', []):
+                if change.get('id'):
+                    changed_movie_ids.add(change['id'])
+            
+            # Fetch full movie details for each changed movie
+            movies = []
+            for movie_id in changed_movie_ids:
+                try:
+                    movie_data = self.get_movie_details(movie_id)
+                    if movie_data:
+                        movies.append(movie_data)
+                    time.sleep(0.25)  # Rate limiting
+                except Exception as e:
+                    logger.error(f"Error fetching details for movie {movie_id}: {str(e)}")
+                    continue
+            
+            logger.info(f"Retrieved {len(movies)} changed movies")
+            return movies
+            
+        except Exception as e:
+            logger.error(f"Error getting recent changes: {str(e)}")
+            return []
+
+    def search_movies(self, query: str) -> List[Dict]:
+        """
+        Search for movies by name.
+        
+        Args:
+            query: Movie name to search for
+            
+        Returns:
+            List of movie dictionaries
+        """
+        try:
+            # Make API request to search endpoint
+            response = self._make_request(
+                "search/movie",
+                params={
+                    "query": query,
+                    "language": "en-US",
+                    "include_adult": False
+                }
+            )
+            
+            # Extract results
+            results = response.get('results', [])
+            
+            # Log results
+            logger.info(f"Found {len(results)} movies matching '{query}'")
+            
+            return results
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error searching movies: {str(e)}")
+            return [] 

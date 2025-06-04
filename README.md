@@ -1,245 +1,208 @@
 # Movie Data ETL System
 
-A robust ETL (Extract, Transform, Load) system for movie data, combining information from MovieLens and TMDB (The Movie Database) APIs.
+A comprehensive ETL (Extract, Transform, Load) system for managing movie data from The Movie Database (TMDB).
 
 ## Features
 
-- **Dual Data Source Integration**
-  - MovieLens dataset integration
-  - TMDB API integration with automatic updates
-  - Intelligent data merging and conflict resolution
+- Initial data loading from TMDB
+- Processing of recent changes
+- Handling of missing movies
+- Interactive movie search with fuzzy matching
+- YAML-based review process
+- Comprehensive error handling
+- Detailed logging
 
-- **Robust Data Processing**
-  - YAML-based intermediate storage for data validation
-  - Batch processing for efficient data loading
-  - Automatic genre and relationship management
-  - Comprehensive error handling and logging
-  - Data validation and cleaning
+## Dependencies
 
-- **Database Management**
-  - MySQL database integration
-  - Automatic schema management
-  - Efficient bulk operations
-  - Relationship tracking and updates
-
-## Prerequisites
-
-- Python 3.11+
-- MySQL 8.0+
+- Python 3.8+
+- SQLAlchemy
 - TMDB API key
-- MovieLens dataset
+- Other requirements listed in `requirements.txt`
 
-## Installation
+## Setup
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd Back_End
-```
-
-2. Create and activate a virtual environment:
+1. Create a virtual environment:
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. Install dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
-Create a `.env` file in the project root with the following variables:
-```env
-TMDB_API_KEY=your_tmdb_api_key
-SQL_HOST=localhost
-SQL_PORT=3306
-SQL_USER=your_db_user
-SQL_PASS=your_db_password
-SQL_DB=your_db_name
+3. Create a `.env` file with your TMDB API key:
+```
+API_KEY=your_tmdb_api_key_here
 ```
 
-## Usage
-
-### Data Processing Workflow
-
-The system uses a two-step process for data loading:
-
-1. **Data Extraction and Storage**
-   - Data is fetched from TMDB API
-   - Stored in YAML files for validation and inspection
-   - Organized by batch type (initial, missing, changes)
-
-2. **Data Loading**
-   - YAML files are processed and loaded into the database
-   - Batch processing for efficiency
-   - Error handling and recovery
-   - Data validation against schema
-   - Updates existing records or adds new ones
-
-### Data Validation
-
-The system performs validation at multiple levels:
-
-1. **Schema Validation**
-   - Validates data structure against defined schema
-   - Ensures required fields are present
-   - Checks data types and formats
-
-2. **Data Integrity**
-   - Validates relationships between entities
-   - Ensures referential integrity
-   - Handles duplicate entries appropriately
-
-3. **Batch Processing**
-   - Validates data in batches for efficiency
-   - Continues processing on non-critical errors
-   - Logs validation issues for review
-
-### Table Operations
-
-Different commands handle database tables differently:
-
-1. **Initial Load (`init`)**
-   - Creates tables if they don't exist
-   - Loads MovieLens data directly
-   - Processes TMDB data through YAML files
-
-2. **Missing Movies (`missing`)**
-   - Updates existing movies
-   - Adds new movies
-   - Maintains relationships
-   - Does NOT clear or drop tables
-
-3. **Recent Changes (`changes`)**
-   - Updates existing movies
-   - Adds new movies
-   - Maintains relationships
-   - Does NOT clear or drop tables
-
-4. **Clear Database (`clear`)**
-   - Requires explicit `--force` flag
-   - Removes all data while keeping structure
-   - Requires user confirmation
+## Commands
 
 ### Initial Data Load
-
-The initial data load process consists of three steps:
-
-1. **Load MovieLens Data**
-   ```bash
-   # This loads the MovieLens CSV data directly into the database
-   python -m src.etl.movie_etl init --load-movielens
-   ```
-
-2. **Fetch TMDB Data**
-   ```bash
-   # This fetches TMDB data from the latest MovieLens date to present
-   # The script automatically determines the start date based on the latest MovieLens movie
-   python -m src.etl.movie_etl init --fetch-tmdb
-   ```
-
-3. **Process TMDB Data**
-   ```bash
-   # This processes the YAML files containing TMDB data and loads them into the database
-   python -m src.etl.yaml_processor --batch-type initial
-   ```
-
-Alternatively, you can run all steps in sequence:
+Load movies from the latest year to the current year:
 ```bash
-# This will execute all three steps in order
-python -m src.etl.movie_etl init --full
+python -m src.etl.tmdb_etl init
 ```
 
-For custom year ranges in TMDB data:
+Load movies for a specific year range:
 ```bash
-# Specify custom year range for TMDB data
-python -m src.etl.movie_etl init --fetch-tmdb --start-year 2020 --end-year 2023
+python -m src.etl.tmdb_etl init --start-year 2020 --end-year 2023
 ```
 
-### Incremental Updates
-
-To update the database with new movies from TMDB:
-
+### Process Changes
+Process changes from the last 24 hours:
 ```bash
-# Step 1: Extract and store new movies
-python -m src.etl.movie_etl missing --after-date 2023-01-01
-
-# Step 2: Process YAML files and load into database
-python -m src.etl.yaml_processor --batch-type missing
+python -m src.etl.tmdb_etl changes
 ```
 
-### Process Recent Changes
-
-To process recent movie changes:
-
+Process changes from a specific number of days:
 ```bash
-# Step 1: Extract and store changes
-python -m src.etl.movie_etl changes --days 1
-
-# Step 2: Process YAML files and load into database
-python -m src.etl.yaml_processor --batch-type changes
+python -m src.etl.tmdb_etl changes --days 7
 ```
 
-### Process Specific YAML File
-
-To process a specific YAML file:
-
+### Process Missing Movies
+Fetch missing movies since the last run:
 ```bash
-python -m src.etl.yaml_processor --file data/movies/raw/initial_2023_20240101_120000.yaml
+python -m src.etl.tmdb_etl missing
 ```
 
-## Project Structure
-
-```
-src/
-├── api/
-│   ├── tmdb_client.py      # TMDB API integration
-│   └── movielens_client.py # MovieLens data handling
-├── database/
-│   └── db_manager.py       # Database operations
-├── etl/
-│   ├── movie_etl.py        # Main ETL process
-│   └── yaml_processor.py   # YAML file processing
-└── utils/
-    └── yaml_handler.py     # YAML file operations
+Fetch missing movies after a specific date:
+```bash
+python -m src.etl.tmdb_etl missing --after-date 2023-01-01
 ```
 
-## Data Model
+### Search Movies
+Search by movie name (with fuzzy matching):
+```bash
+python -m src.etl.tmdb_etl search "star wars"
+```
 
-The system maintains the following main entities:
+Search by exact TMDB ID:
+```bash
+python -m src.etl.tmdb_etl search 11 --by id
+```
 
-- **Movies**: Core movie information
-- **Genres**: Movie genres
-- **People**: Cast and crew information
-- **Credits**: Movie-people relationships
-- **Keywords**: Movie keywords and tags
+The search command provides:
+- Fuzzy matching for name searches
+- Match scores for each result
+- Movie overviews and release dates
+- Interactive selection of the desired movie
 
-## Error Handling
+### YAML Processing
 
-The system includes comprehensive error handling:
+#### Fetch to YAML
+Fetch movies to a YAML file:
+```bash
+python -m src.etl.tmdb_etl fetch --type initial
+python -m src.etl.tmdb_etl fetch --type missing
+python -m src.etl.tmdb_etl fetch --type changes
+```
 
-- API rate limiting and retry logic
-- Database transaction management
-- Data validation and cleaning
-- Detailed logging for debugging
-- YAML-based error recovery
+#### Review YAML
+Review movies in a YAML file:
+```bash
+python -m src.etl.tmdb_etl review --file data/yaml/tmdb_initial_20240101_120000.yaml
+```
+
+#### Load from YAML
+Load approved movies from YAML:
+```bash
+python -m src.etl.tmdb_etl load --file data/yaml/tmdb_initial_20240101_120000.yaml
+```
+
+#### Combined Command
+Fetch, review, and load in one command:
+```bash
+python -m src.etl.tmdb_etl fetch-review-load --type initial
+```
+
+## YAML File Structure
+
+```yaml
+metadata:
+  batch_type: initial/missing/changes
+  batch_id: optional_identifier
+  timestamp: YYYYMMDD_HHMMSS
+  movie_count: number_of_movies
+movies:
+  - title: Movie Title
+    tmdb_id: 12345
+    release_date: YYYY-MM-DD
+    overview: Movie description
+    approval_status: yes/no/skip
+    review_date: YYYY-MM-DD HH:MM:SS
+```
+
+## Review Process
+
+1. **Fetch**: Movies are fetched and saved to a YAML file
+2. **Review**: Each movie is reviewed and marked as:
+   - `yes`: Approved for loading
+   - `no`: Rejected
+   - `skip`: Skip for now
+3. **Load**: Only approved movies are loaded into the database
+
+## File Naming Convention
+
+YAML files follow the pattern:
+```
+tmdb_{batch_type}_{batch_id}_{timestamp}.yaml
+```
+
+Example:
+```
+tmdb_initial_2023_20240101_120000.yaml
+```
+
+## Archiving
+
+Reviewed YAML files are automatically moved to:
+```
+data/yaml/archived/
+```
+
+## Logging
+
+The system provides detailed logging for:
+- API requests
+- Database operations
+- Error handling
+- Progress tracking
 
 ## Recent Improvements
 
-- YAML-based intermediate storage for better data validation
-- Separated data extraction and loading processes
-- Enhanced error handling and recovery
-- Improved batch processing
-- Better data validation through schema enforcement
+- Added fuzzy matching for movie searches
+- Enhanced error handling
+- Improved progress tracking
+- Added support for batch processing
+- Implemented YAML-based review process
+
+## Error Handling
+
+The system includes comprehensive error handling for:
+- API failures
+- Database errors
+- Invalid data
+- Network issues
+- Rate limiting
+
+## Database Schema
+
+The system uses the following tables:
+- `movies_raw`: Raw movie data
+- `movies`: Processed movie data
+- `tmdb_movies`: TMDB-specific movie data
+- `genres`: Movie genres
+- `movie_genres`: Movie-genre relationships
+- `tmdb_movie_genres`: TMDB movie-genre relationships
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+3. Make your changes
+4. Submit a pull request
 
 ## License
 
@@ -247,14 +210,86 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Data Sources
 
-### MovieLens Dataset (ml-32m)
-- Contains 32 million ratings and 2 million tag applications
-- Applied to 87,585 movies by 200,948 users
-- Collected from January 1995 to October 2023
-- Includes movie metadata, user ratings, and tags
+### MovieLens Dataset
+- Used for initial movie data
+- Provides base movie information
+- Used to determine the latest year for initial loads
 
 ### TMDB API
-- Provides additional movie metadata
-- Includes credits, videos, reviews, keywords
+- Provides movie metadata, credits, videos, reviews, keywords
 - Contains release dates, content ratings, and watch providers
-- Used to enrich the MovieLens data
+- Used for updates and missing data
+
+## YAML Processing
+
+The system uses YAML files as an intermediate step for human review before loading data into the database. This is particularly useful for changes and missing movies that require approval.
+
+### YAML Commands
+
+```bash
+# Fetch movies to YAML for review
+python -m src.etl.tmdb_etl fetch --type missing
+python -m src.etl.tmdb_etl fetch --type changes
+python -m src.etl.tmdb_etl fetch --type search --query "movie name"
+
+# Review movies in YAML
+python -m src.etl.tmdb_etl review --file data/yaml/tmdb_missing_20240315_123456.yaml
+
+# Load approved movies from YAML
+python -m src.etl.tmdb_etl load --file data/yaml/tmdb_missing_20240315_123456.yaml
+
+# Combined fetch, review, and load
+python -m src.etl.tmdb_etl fetch-review-load --type missing
+```
+
+### YAML File Structure
+```yaml
+metadata:
+  batch_type: missing  # or changes, search
+  batch_id: 2024-03-15
+  timestamp: 20240315_123456
+  movie_count: 100
+
+movies:
+  - id: 12345
+    title: "Movie Title"
+    release_date: "2024-03-15"
+    overview: "Movie description..."
+    adult: false
+    genres:
+      - name: "Action"
+      - name: "Drama"
+    approval_status: null  # Will be set during review
+    review_date: null     # Will be set during review
+```
+
+### Review Process
+1. **Fetch to YAML**:
+   - Movies are fetched from TMDB
+   - Filtered for adult content
+   - Saved to YAML with metadata
+   - Files are stored in `data/yaml/` directory
+
+2. **Review YAML**:
+   - Interactive review of each movie
+   - Options: approve (yes), reject (no), or skip
+   - Updates approval status and review date
+   - Saves changes back to YAML
+
+3. **Load from YAML**:
+   - Only approved movies are loaded
+   - Creates database records
+   - Processes genres and relationships
+   - Archives YAML file after successful load
+
+### YAML File Naming
+Files are named using the pattern:
+```
+tmdb_{batch_type}_{batch_id}_{timestamp}.yaml
+```
+Example: `tmdb_missing_20240315_123456.yaml`
+
+### Archiving
+- After successful load, YAML files are moved to `data/yaml/archived/`
+- Maintains a history of processed batches
+- Prevents duplicate processing

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, JSON, Text
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, JSON, Text, UniqueConstraint, BigInteger
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timedelta
@@ -27,10 +27,10 @@ class Movie(Base):
     overview = Column(Text)
     poster_path = Column(String(255))
     backdrop_path = Column(String(255))
-    adult = Column(Boolean, default=False)
+    adult = Column(Boolean, default=False)  # TINYINT in DB
     original_language = Column(String(10))
     runtime = Column(Integer)
-    status = Column(String(50))  # Rumored, Planned, In Production, Post Production, Released, Canceled
+    status = Column(String(50))
     tagline = Column(String(255))
     popularity = Column(Float)
     vote_average = Column(Float)
@@ -47,14 +47,15 @@ class Movie(Base):
     keywords = relationship("MovieKeyword", back_populates="movie")
 
 class Genre(Base):
-    """Genre table model."""
+    """Genre model."""
     __tablename__ = 'genres'
-
+    
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-
+    
     # Relationships
     movies = relationship("MovieGenre", back_populates="genre")
+    tmdb_movies = relationship("TMDBMovieGenre", back_populates="genre")
 
 class MovieGenre(Base):
     """Movie-Genre relationship table."""
@@ -69,7 +70,7 @@ class MovieGenre(Base):
     genre = relationship("Genre", back_populates="movies")
 
 class Person(Base):
-    """Person table model (actors, directors, crew)."""
+    """Person model (actors, directors, crew)."""
     __tablename__ = 'people'
 
     id = Column(Integer, primary_key=True)
@@ -81,6 +82,7 @@ class Person(Base):
 
     # Relationships
     credits = relationship("MovieCredit", back_populates="person")
+    tmdb_credits = relationship("TMDBMovieCredit", back_populates="person")
 
 class MovieCredit(Base):
     """Movie credits table (cast and crew)."""
@@ -121,6 +123,78 @@ class MovieChange(Base):
     change_date = Column(DateTime, default=datetime.utcnow)
     details = Column(JSON)
 
+class TMDBMovie(Base):
+    """TMDB Movie model."""
+    __tablename__ = 'tmdb_movies'
+    
+    id = Column(Integer, primary_key=True)
+    tmdb_id = Column(Integer, unique=True, nullable=False)
+    title = Column(String(255), nullable=False)
+    original_title = Column(String(255))
+    release_date = Column(DateTime)
+    overview = Column(Text)
+    poster_path = Column(String(255))
+    backdrop_path = Column(String(255))
+    adult = Column(Boolean, default=False)  # TINYINT in DB
+    original_language = Column(String(10))
+    runtime = Column(Integer)
+    status = Column(String(50))
+    tagline = Column(String(255))
+    popularity = Column(Float)
+    vote_average = Column(Float)
+    vote_count = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_approved = Column(Boolean, default=False)  # TINYINT in DB
+    approval_date = Column(DateTime)
+    approval_notes = Column(Text)
+    
+    # Relationships
+    genres = relationship("TMDBMovieGenre", back_populates="movie", cascade="all, delete-orphan")
+    credits = relationship("TMDBMovieCredit", back_populates="movie", cascade="all, delete-orphan")
+    keywords = relationship("TMDBMovieKeyword", back_populates="movie", cascade="all, delete-orphan")
+
+class TMDBMovieGenre(Base):
+    """TMDB Movie-Genre relationship model."""
+    __tablename__ = 'tmdb_movie_genres'
+    
+    id = Column(Integer, primary_key=True)
+    movie_id = Column(Integer, ForeignKey('tmdb_movies.id', ondelete='CASCADE'))
+    genre_id = Column(Integer, ForeignKey('genres.id', ondelete='CASCADE'))
+    
+    # Relationships
+    movie = relationship("TMDBMovie", back_populates="genres")
+    genre = relationship("Genre", back_populates="tmdb_movies")
+
+class TMDBMovieCredit(Base):
+    """TMDB Movie credits table (cast and crew)."""
+    __tablename__ = 'tmdb_movie_credits'
+
+    id = Column(Integer, primary_key=True)
+    movie_id = Column(Integer, ForeignKey('tmdb_movies.id'), nullable=False)
+    person_id = Column(Integer, ForeignKey('people.id'), nullable=False)
+    credit_type = Column(String(50))  # 'cast' or 'crew'
+    character_name = Column(String(255))  # for cast
+    order = Column(Integer)  # for cast
+    department = Column(String(100))  # for crew
+    job = Column(String(100))  # for crew
+
+    # Relationships
+    movie = relationship("TMDBMovie", back_populates="credits")
+    person = relationship("Person", back_populates="tmdb_credits")
+
+class TMDBMovieKeyword(Base):
+    """TMDB Movie keywords table."""
+    __tablename__ = 'tmdb_movie_keywords'
+
+    id = Column(Integer, primary_key=True)
+    movie_id = Column(Integer, ForeignKey('tmdb_movies.id'), nullable=False)
+    tmdb_id = Column(Integer)
+    name = Column(String(100))
+
+    # Relationships
+    movie = relationship("TMDBMovie", back_populates="keywords")
+
 class DatabaseManager:
     """Manages database operations for the movie data system."""
     
@@ -154,6 +228,10 @@ class DatabaseManager:
         self.MovieCredit = MovieCredit
         self.MovieKeyword = MovieKeyword
         self.MovieChange = MovieChange
+        self.TMDBMovie = TMDBMovie
+        self.TMDBMovieGenre = TMDBMovieGenre
+        self.TMDBMovieCredit = TMDBMovieCredit
+        self.TMDBMovieKeyword = TMDBMovieKeyword
 
     def __del__(self):
         """Clean up the session when the object is destroyed."""
@@ -203,19 +281,16 @@ class DatabaseManager:
 
     def clear_database(self) -> None:
         """
-        Clear all data from the database tables.
+        Clear all data from the TMDB-related tables.
         This will remove all records while keeping the table structure intact.
         """
         try:
-            # Get all tables in reverse order of dependencies
+            # Get all TMDB-related tables in reverse order of dependencies
             tables = [
-                self.MovieKeyword,
-                self.MovieCredit,
-                self.MovieGenre,
-                self.MovieChange,
-                self.Movie,
-                self.Person,
-                self.Genre
+                self.TMDBMovieKeyword,
+                self.TMDBMovieCredit,
+                self.TMDBMovieGenre,
+                self.TMDBMovie
             ]
             
             # Delete data from each table
@@ -223,11 +298,11 @@ class DatabaseManager:
                 self.session.query(table).delete()
             
             self.session.commit()
-            logger.info("✅ Database cleared successfully")
+            logger.info("✅ TMDB tables cleared successfully")
             
         except Exception as e:
             self.session.rollback()
-            logger.error(f"Error clearing database: {str(e)}")
+            logger.error(f"Error clearing TMDB tables: {str(e)}")
             raise
 
     def load_movie_data(self, movie_data: Dict[str, Any]) -> None:
@@ -513,20 +588,26 @@ class DatabaseManager:
 
     def get_latest_release_date(self) -> Optional[datetime]:
         """
-        Get the most recent release date in the database.
+        Get the most recent release date from both movies and tmdb_movies tables.
+        Uses raw SQL to query both tables since we don't have a model for the movies table.
         
         Returns:
             Optional[datetime]: The latest release date found, or None if no movies exist
         """
         try:
-            session = self.Session()
-            latest_movie = session.query(self.Movie)\
-                .filter(self.Movie.release_date.isnot(None))\
-                .order_by(self.Movie.release_date.desc())\
-                .first()
-            return latest_movie.release_date if latest_movie else None
+            # Query both tables using raw SQL
+            query = text("""
+                SELECT MAX(release_date) as latest_date
+                FROM (
+                    SELECT release_date FROM movies WHERE release_date IS NOT NULL
+                    UNION ALL
+                    SELECT release_date FROM tmdb_movies WHERE release_date IS NOT NULL
+                ) as combined_dates
+            """)
+            
+            result = self.session.execute(query).scalar()
+            return result if result else None
+            
         except Exception as e:
             logger.error(f"Error getting latest release date: {str(e)}")
-            return None
-        finally:
-            session.close() 
+            return None 
