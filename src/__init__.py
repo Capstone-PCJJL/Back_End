@@ -1,3 +1,0 @@
-"""
-Movie Database ETL Pipeline
-""" 

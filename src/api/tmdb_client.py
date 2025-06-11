@@ -1,449 +1,398 @@
 import os
-import requests
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
-from dotenv import load_dotenv
 import logging
 import time
+from typing import List, Dict, Any, Optional
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from datetime import datetime
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+# load .senv
+from dotenv import load_dotenv
+import threading
+load_dotenv()
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/tmdb_api.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class TMDBClient:
-    """Enhanced client for interacting with The Movie Database (TMDB) API."""
+    """Client for interacting with TMDB API."""
     
     def __init__(self):
-        """Initialize the TMDB client with API credentials."""
-        load_dotenv()
-        self.api_key = os.getenv("API_KEY")
-        self.base_url = "https://api.themoviedb.org/3"
+        """Initialize TMDB client with API key."""
+        self.api_key = os.getenv('API_KEY')
+        self.base_url = os.getenv('BASE_URL', 'https://api.themoviedb.org/3')
+        self.bearer_token = os.getenv('TMDB_BEARER_TOKEN')
         
         if not self.api_key:
-            raise ValueError("TMDB API key not found in environment variables")
+            raise ValueError("API_KEY environment variable not set")
+        if not self.bearer_token:
+            raise ValueError("TMDB_BEARER_TOKEN environment variable not set")
+        
+        # Create a session with connection pooling and retries
+        self.session = requests.Session()
+        
+        # Configure retry strategy with exponential backoff
+        retry_strategy = Retry(
+            total=3,  # Reduced retries
+            backoff_factor=0.1,  # Reduced backoff time
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        
+        # Mount the adapter with retry strategy and optimized pool
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=20,     # Reduced initial pool size
+            pool_maxsize=100,        # Keep max connections high
+            pool_block=True          # Block when pool is full
+        )
+        self.session.mount("https://", adapter)
+        
+        # Set headers
+        self.session.headers.update({
+            'Authorization': f'Bearer {self.bearer_token}',
+            'accept': 'application/json'
+        })
+        
+        # Rate limiting
+        self.request_times = []
+        self.max_requests_per_second = 40  # Increased rate limit
+        
+        # Thread-safe caching
+        self.request_cache = {}
+        self.cache_ttl = 3600  # Cache TTL in seconds
+        self.cache_lock = threading.Lock()
+        self.last_cache_cleanup = time.time()
+        self.cache_cleanup_interval = 300  # Clean cache every 5 minutes
+        
+        # Test connection
+        try:
+            test_response = self._make_request('configuration')
+            if not test_response:
+                raise ValueError("Failed to connect to TMDB API")
+            logger.info("Successfully connected to TMDB API")
+        except Exception as e:
+            logger.error(f"Failed to initialize TMDB client: {str(e)}")
+            raise
 
-    def _make_request(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Make a request to the TMDB API.
+    def _cleanup_cache(self):
+        """Clean up expired cache entries."""
+        now = time.time()
+        if now - self.last_cache_cleanup > self.cache_cleanup_interval:
+            with self.cache_lock:
+                self.request_cache = {k: v for k, v in self.request_cache.items() 
+                                    if now - v[0] < self.cache_ttl}
+                self.last_cache_cleanup = now
+
+    def _get_from_cache(self, cache_key: str) -> Optional[Dict]:
+        """Get data from cache in a thread-safe way."""
+        with self.cache_lock:
+            if cache_key in self.request_cache:
+                cache_time, cache_data = self.request_cache[cache_key]
+                if time.time() - cache_time < self.cache_ttl:
+                    return cache_data
+        return None
+
+    def _add_to_cache(self, cache_key: str, data: Dict):
+        """Add data to cache in a thread-safe way."""
+        with self.cache_lock:
+            self.request_cache[cache_key] = (time.time(), data)
+
+    def _rate_limit(self):
+        """Implement rate limiting."""
+        now = time.time()
+        # Remove requests older than 1 second
+        self.request_times = [t for t in self.request_times if now - t < 1]
+        
+        # If we've made too many requests in the last second, wait
+        if len(self.request_times) >= self.max_requests_per_second:
+            sleep_time = 1 - (now - self.request_times[0])
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            # Clean up old requests again
+            self.request_times = [t for t in self.request_times if now - t < 1]
+        
+        # Add current request
+        self.request_times.append(now)
+
+    def _make_request(self, endpoint: str, params: Dict = None) -> Dict:
+        """Make a request to the TMDB API with rate limiting and caching."""
+        try:
+            # Check cache first
+            cache_key = f"{endpoint}:{str(params)}"
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data:
+                return cached_data
+            
+            self._rate_limit()  # Apply rate limiting
+            
+            url = f"{self.base_url}/{endpoint}"
+            response = self.session.get(url, params=params, timeout=5)  # Added timeout
+            response.raise_for_status()
+            data = response.json()
+            
+            # Cache the response
+            self._add_to_cache(cache_key, data)
+            
+            # Periodically clean up cache
+            self._cleanup_cache()
+            
+            return data
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed: {str(e)}")
+            return None
+    
+    def get_movie_ids(self, since_id: int = None, test_year: int = None) -> List[int]:
+        """Get all movie IDs from TMDB, year by year."""
+        movie_ids = set()  # Use set to avoid duplicates
+        max_pages = 300  # Reduced from 500 to 300
+        
+        try:
+            if test_year:
+                # If test_year is provided, only process that year
+                years_to_process = [test_year]
+                logger.info(f"Test mode: Processing only year {test_year}")
+            else:
+                # Get earliest and latest years
+                earliest_params = {
+                    'sort_by': 'release_date.asc',
+                    'page': 1,
+                    'include_adult': False,
+                    'include_video': False
+                }
+                earliest_data = self._make_request('discover/movie', earliest_params)
+                earliest_year = datetime.strptime(earliest_data['results'][0]['release_date'], '%Y-%m-%d').year
+                
+                # Set latest year to 2023 for initial data load
+                latest_year = 2023
+                
+                years_to_process = range(earliest_year, latest_year + 1)
+                logger.info(f"Fetching movies from {earliest_year} to {latest_year}")
+            
+            # Get movies year by year
+            for year in years_to_process:
+                logger.info(f"Fetching movies from year {year}")
+                
+                # Get total pages for this year
+                year_params = {
+                    'primary_release_year': year,
+                    'sort_by': 'popularity.desc',  # Only use popularity sorting
+                    'page': 1,
+                    'include_adult': False,
+                    'include_video': False
+                }
+                year_data = self._make_request('discover/movie', year_params)
+                total_pages = min(year_data.get('total_pages', 0), max_pages)
+                
+                # Create progress bar for this year
+                with tqdm(total=total_pages, desc=f"Pages for {year}", leave=False) as pbar:
+                    page = 1
+                    while page <= total_pages:
+                        try:
+                            params = {
+                                'primary_release_year': year,
+                                'sort_by': 'popularity.desc',
+                                'page': page,
+                                'include_adult': False,
+                                'include_video': False
+                            }
+                            
+                            data = self._make_request('discover/movie', params)
+                            if not data or not data.get('results'):
+                                break
+                            
+                            # Extract movie IDs
+                            for movie in data.get('results', []):
+                                movie_id = movie.get('id')
+                                if movie_id:
+                                    if since_id and movie_id <= since_id:
+                                        continue
+                                    movie_ids.add(movie_id)
+                            
+                            page += 1
+                            pbar.update(1)
+                            
+                        except Exception as e:
+                            logger.error(f"Error getting movies for year {year}: {str(e)}")
+                            break
+        
+        except Exception as e:
+            logger.error(f"Error getting year range: {str(e)}")
+            return list(movie_ids)
+        
+        # Convert set to sorted list
+        movie_ids = sorted(list(movie_ids))
+        logger.info(f"Found {len(movie_ids)} unique movies to process")
+        return movie_ids
+
+    def _fetch_movies_for_year(self, year: int, sort_by: str, since_id: int = None) -> set:
+        """Fetch movies for a specific year and sort criteria."""
+        movie_ids = set()
+        max_pages = 300  # Reduced from 500 to 300
+        page = 1
+        
+        try:
+            # Get total pages for this year and sort criteria
+            year_params = {
+                'primary_release_year': year,
+                'sort_by': sort_by,
+                'page': 1,
+                'include_adult': False,
+                'include_video': False
+            }
+            year_data = self._make_request('discover/movie', year_params)
+            total_pages = min(year_data.get('total_pages', 0), max_pages)
+            
+            # Create progress bar for this year and sort criteria
+            with tqdm(total=total_pages, desc=f"Pages for {year} ({sort_by})", leave=False) as pbar:
+                while page <= total_pages:
+                    try:
+                        params = {
+                            'primary_release_year': year,
+                            'sort_by': sort_by,
+                            'page': page,
+                            'include_adult': False,
+                            'include_video': False
+                        }
+                        
+                        data = self._make_request('discover/movie', params)
+                        if not data or not data.get('results'):
+                            break
+                        
+                        # Extract movie IDs
+                        for movie in data.get('results', []):
+                            movie_id = movie.get('id')
+                            if movie_id:
+                                if since_id and movie_id <= since_id:
+                                    continue
+                                movie_ids.add(movie_id)
+                        
+                        page += 1
+                        pbar.update(1)
+                        
+                        # Reduced delay between requests
+                        time.sleep(0.01)  # 10ms delay between requests
+                        
+                    except Exception as e:
+                        logger.error(f"Error getting movies for year {year} with sort {sort_by}: {str(e)}")
+                        break
+        
+        except Exception as e:
+            logger.error(f"Error getting data for year {year} with sort {sort_by}: {str(e)}")
+        
+        return movie_ids
+    
+    @lru_cache(maxsize=10000)  # increased cache size
+    def get_movie_details(self, movie_id: int) -> Optional[Dict]:
+        """Get detailed information about a movie."""
+        try:
+            return self._make_request(f'movie/{movie_id}')
+        except Exception as e:
+            logger.error(f"Error getting movie details for ID {movie_id}: {str(e)}")
+            return None
+    
+    @lru_cache(maxsize=10000)  # increased cache size
+    def get_movie_credits(self, movie_id: int) -> Optional[Dict]:
+        """Get cast and crew information for a movie."""
+        try:
+            return self._make_request(f'movie/{movie_id}/credits')
+        except Exception as e:
+            logger.error(f"Error getting credits for movie ID {movie_id}: {str(e)}")
+            return None
+
+    @lru_cache(maxsize=10000)  # increased cache size
+    def get_person(self, person_id: int) -> Optional[Dict]:
+        """Get detailed information about a person."""
+        try:
+            return self._make_request(f'person/{person_id}')
+        except Exception as e:
+            logger.error(f"Error getting person details for ID {person_id}: {str(e)}")
+            return None
+
+    def search_movie(self, query: str) -> List[Dict]:
+        """Search for movies by title or ID.
         
         Args:
-            endpoint: API endpoint
-            params: Query parameters
+            query: Movie title or ID to search for
             
         Returns:
-            Dict[str, Any]: API response
-        """
-        if params is None:
-            params = {}
-            
-        # Always include API key in params
-        params['api_key'] = self.api_key
-            
-        url = f"{self.base_url}/{endpoint}"
-        
-        max_retries = 3
-        retry_delay = 1  # seconds
-        
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(
-                    url, 
-                    params=params,
-                    timeout=10,  # Add timeout
-                    verify=True  # Enable SSL verification
-                )
-                response.raise_for_status()
-                return response.json()
-            except requests.exceptions.SSLError as e:
-                logger.error(f"SSL Error on attempt {attempt + 1}: {str(e)}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request failed on attempt {attempt + 1}: {str(e)}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-            except Exception as e:
-                logger.error(f"Unexpected error on attempt {attempt + 1}: {str(e)}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-
-    def get_all_movies(self, start_year: int = 1900, end_year: int = None) -> List[Dict[str, Any]]:
-        """
-        Get all movies from TMDB within a year range.
-        
-        Args:
-            start_year: Start year to fetch movies from
-            end_year: End year to fetch movies to (defaults to current year)
-            
-        Returns:
-            List[Dict[str, Any]]: List of movie data
-        """
-        if end_year is None:
-            end_year = datetime.now().year
-            
-        all_movies = []
-        for year in range(start_year, end_year + 1):
-            logger.info(f"Fetching movies for year {year}")
-            movies = self.get_movies_by_year(year)
-            all_movies.extend(movies)
-            time.sleep(0.25)  # Rate limiting
-            
-        return all_movies
-
-    def get_movies_by_year(self, year: int) -> List[Dict[str, Any]]:
-        """
-        Get movies released in a specific year from TMDB.
-        
-        Args:
-            year: Year to get movies for
-            
-        Returns:
-            List[Dict[str, Any]]: List of movie data
+            List of movie results from TMDB
         """
         try:
-            # Get movies released in the year
+            # If query is a movie ID, get that specific movie
+            if query.isdigit():
+                movie_id = int(query)
+                movie_data = self.get_movie_details(movie_id)
+                return [movie_data] if movie_data else []
+
+            # Otherwise search by title
+            params = {
+                'query': query,
+                'include_adult': False,
+                'language': 'en-US',
+                'page': 1
+            }
+            
+            response = self._make_request('search/movie', params)
+            if not response or 'results' not in response:
+                return []
+                
+            return response['results']
+            
+        except Exception as e:
+            logger.error(f"Error searching for movie '{query}': {str(e)}")
+            return []
+
+    def get_movies_since_date(self, start_date: datetime) -> List[Dict]:
+        """Get movies released since a specific date.
+        
+        Args:
+            start_date: The date to start searching from
+            
+        Returns:
+            List of movie data from TMDB
+        """
+        try:
             movies = []
             page = 1
             total_pages = 1
-            seen_ids = set()  # Track seen movie IDs
+            
+            # Format date for API
+            start_date_str = start_date.strftime('%Y-%m-%d')
             
             while page <= total_pages:
-                try:
-                    response = self._make_request(
-                        'discover/movie',
-                        params={
-                            'primary_release_year': year,
-                            'page': page,
-                            'sort_by': 'popularity.desc',
-                            'include_adult': False,  # Exclude adult content
-                            'language': 'en-US'  # English language
-                        }
-                    )
-                    
-                    if not response:
-                        break
-                        
-                    # Format the movie data to include tmdb_id and deduplicate
-                    for movie in response.get('results', []):
-                        movie_id = movie['id']
-                        if movie_id not in seen_ids:
-                            movie['tmdb_id'] = movie.pop('id')  # Rename id to tmdb_id
-                            movies.append(movie)
-                            seen_ids.add(movie_id)
-                    
-                    total_pages = min(response.get('total_pages', 1), 500)  # TMDB API max is 500 pages
-                    page += 1
-                    
-                    # Rate limiting
-                    time.sleep(0.25)
-                    
-                except requests.exceptions.HTTPError as e:
-                    if e.response.status_code == 400 and page > 500:
-                        # We've hit the page limit, break gracefully
-                        logger.info(f"Reached maximum page limit (500) for year {year}")
-                        break
-                    else:
-                        # Re-raise if it's a different error
-                        raise
-                    
-            logger.info(f"Retrieved {len(movies)} unique movies for year {year}")
-            return movies
-            
-        except Exception as e:
-            logger.error(f"Error getting movies for year {year}: {str(e)}")
-            return []
-
-    def get_movie_details(self, movie_id: int, append_to_response: str = None) -> Dict:
-        """
-        Fetch detailed information for a specific movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            append_to_response: Additional data to include (credits,images,videos,etc.)
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {}
-        if append_to_response:
-            params["append_to_response"] = append_to_response
-        return self._make_request(f"movie/{movie_id}", params)
-
-    def get_movie_changes(self, start_date: str = None, end_date: str = None, page: int = 1) -> Dict:
-        """
-        Fetch movie changes between two dates.
-        
-        Args:
-            start_date: Start date in YYYY-MM-DD format
-            end_date: End date in YYYY-MM-DD format
-            page: The page number to fetch
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        if not start_date:
-            start_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        if not end_date:
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            
-        params = {
-            "start_date": start_date,
-            "end_date": end_date,
-            "page": page
-        }
-        return self._make_request("movie/changes", params)
-
-    def get_movie_images(self, movie_id: int, include_image_language: str = None) -> Dict:
-        """
-        Fetch images for a specific movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            include_image_language: Filter images by language (en,null,etc.)
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {}
-        if include_image_language:
-            params["include_image_language"] = include_image_language
-        return self._make_request(f"movie/{movie_id}/images", params)
-
-    def get_movie_credits(self, movie_id: int) -> Dict:
-        """
-        Fetch cast and crew information for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/credits")
-
-    def get_movie_videos(self, movie_id: int) -> Dict:
-        """
-        Fetch videos (trailers, teasers, etc.) for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/videos")
-
-    def get_movie_reviews(self, movie_id: int, page: int = 1) -> Dict:
-        """
-        Fetch user reviews for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            page: The page number to fetch
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/reviews")
-
-    def get_movie_recommendations(self, movie_id: int, page: int = 1) -> Dict:
-        """
-        Fetch movie recommendations based on a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            page: The page number to fetch
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/recommendations")
-
-    def get_movie_similar(self, movie_id: int, page: int = 1) -> Dict:
-        """
-        Fetch similar movies.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            page: The page number to fetch
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/similar")
-
-    def get_movie_keywords(self, movie_id: int) -> Dict:
-        """
-        Fetch keywords associated with a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/keywords")
-
-    def get_movie_external_ids(self, movie_id: int) -> Dict:
-        """
-        Fetch external IDs (IMDB, Facebook, Instagram, Twitter) for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/external_ids")
-
-    def get_movie_watch_providers(self, movie_id: int) -> Dict:
-        """
-        Fetch watch providers (streaming services) for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/watch/providers")
-
-    def get_movie_translations(self, movie_id: int) -> Dict:
-        """
-        Fetch available translations for a movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/translations")
-
-    def get_movie_lists(self, movie_id: int, page: int = 1) -> Dict:
-        """
-        Fetch lists that contain the movie.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            page: The page number to fetch
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        params = {"page": page}
-        return self._make_request(f"movie/{movie_id}/lists")
-
-    def get_movie_release_dates(self, movie_id: int) -> Dict:
-        """
-        Fetch release dates for a movie in different countries.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/release_dates")
-
-    def get_movie_content_ratings(self, movie_id: int) -> Dict:
-        """
-        Fetch content ratings for a movie in different countries.
-        
-        Args:
-            movie_id: The TMDB ID of the movie
-            
-        Returns:
-            Dict: JSON response from the API
-        """
-        return self._make_request(f"movie/{movie_id}/content_ratings")
-
-    def get_recent_changes(self, days: int = 1) -> List[Dict[str, Any]]:
-        """
-        Get recent movie changes from TMDB.
-        
-        Args:
-            days: Number of days to look back for changes
-            
-        Returns:
-            List[Dict[str, Any]]: List of changed movie data
-        """
-        try:
-            # Calculate start and end dates
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-            
-            # Format dates for API
-            start_date_str = start_date.strftime("%Y-%m-%d")
-            end_date_str = end_date.strftime("%Y-%m-%d")
-            
-            logger.info(f"Fetching changes from {start_date_str} to {end_date_str}")
-            
-            # Get changes from TMDB
-            changes_response = self.get_movie_changes(start_date=start_date_str, end_date=end_date_str)
-            if not changes_response:
-                return []
-            
-            # Get all changed movie IDs
-            changed_movie_ids = set()
-            for change in changes_response.get('results', []):
-                if change.get('id'):
-                    changed_movie_ids.add(change['id'])
-            
-            # Fetch full movie details for each changed movie
-            movies = []
-            for movie_id in changed_movie_ids:
-                try:
-                    movie_data = self.get_movie_details(movie_id)
-                    if movie_data:
-                        movies.append(movie_data)
-                    time.sleep(0.25)  # Rate limiting
-                except Exception as e:
-                    logger.error(f"Error fetching details for movie {movie_id}: {str(e)}")
-                    continue
-            
-            logger.info(f"Retrieved {len(movies)} changed movies")
-            return movies
-            
-        except Exception as e:
-            logger.error(f"Error getting recent changes: {str(e)}")
-            return []
-
-    def search_movies(self, query: str) -> List[Dict]:
-        """
-        Search for movies by name.
-        
-        Args:
-            query: Movie name to search for
-            
-        Returns:
-            List of movie dictionaries
-        """
-        try:
-            # Make API request to search endpoint
-            response = self._make_request(
-                "search/movie",
-                params={
-                    "query": query,
-                    "language": "en-US",
-                    "include_adult": False
+                params = {
+                    'primary_release_date.gte': start_date_str,
+                    'sort_by': 'release_date.desc',
+                    'page': page,
+                    'include_adult': False,
+                    'include_video': False
                 }
-            )
+                
+                response = self._make_request('discover/movie', params)
+                if not response or 'results' not in response:
+                    break
+                    
+                movies.extend(response['results'])
+                total_pages = min(response.get('total_pages', 1), 20)  # Limit to 20 pages
+                page += 1
+                
+                # Add a small delay between requests
+                time.sleep(0.1)
             
-            # Extract results
-            results = response.get('results', [])
+            return movies
             
-            # Log results
-            logger.info(f"Found {len(results)} movies matching '{query}'")
-            
-            return results
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error searching movies: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error getting movies since {start_date}: {str(e)}")
             return [] 
