@@ -36,10 +36,14 @@ class TMDBUpdater:
                 logger.error(f"Could not find movie with ID {movie_id} in TMDB")
                 return False
 
+            # Log genres before update
+            genres = [genre['name'] for genre in movie_data.get('genres', [])]
+            logger.info(f"Updating movie {movie_id} with genres: {', '.join(genres) if genres else 'No genres'}")
+
             # Get credits
             credits_data = self.client.get_movie_credits(movie_id)
             if not credits_data:
-                logger.error(f"Could not find credits for movie ID {movie_id}")
+                logger.warning(f"No credits found for movie {movie_id}")
                 return False
 
             # Update movie record
@@ -82,11 +86,14 @@ class TMDBUpdater:
 
             # Execute update
             self.conn.execute(update_stmt, movie_record)
-            self.conn.commit()
 
-            # Update credits (delete existing and insert new)
+            # Update genres
+            self._update_genres(movie_id, movie_data)
+
+            # Update credits
             self._update_credits(movie_id, credits_data)
 
+            self.conn.commit()
             logger.info(f"Successfully updated movie {movie_id}")
             return True
 
@@ -105,31 +112,42 @@ class TMDBUpdater:
             credits_records = []
 
             # Process cast (actors)
-            for person in credits_data.get('cast', [])[:8]:  # Top 8 actors
-                if person.get('id'):
-                    credits_records.append({
-                        'movie_id': movie_id,
-                        'person_id': person['id'],
-                        'credit_type': 'cast',
-                        'character_name': person.get('character'),
-                        'credit_order': person.get('order'),
-                        'department': 'Acting',  # Add department for cast
-                        'job': 'Actor'  # Add job for cast
-                    })
+            actors = credits_data.get('cast', [])[:8]  # Top 8 actors
+            if actors:
+                logger.info(f"Processing {len(actors)} actors for movie {movie_id}")
+                for person in actors:
+                    if person.get('id'):
+                        credits_records.append({
+                            'movie_id': movie_id,
+                            'person_id': person['id'],
+                            'credit_type': 'cast',
+                            'character_name': person.get('character'),
+                            'credit_order': person.get('order'),
+                            'department': 'Acting',
+                            'job': 'Actor'
+                        })
+                        logger.info(f"  - Actor: {person.get('name')} as {person.get('character', 'Unknown')}")
+            else:
+                logger.warning(f"No actors found for movie {movie_id}")
 
             # Process crew (directors only)
-            for person in credits_data.get('crew', []):
-                if person.get('job') == 'Director':
+            directors = [person for person in credits_data.get('crew', [])
+                        if person.get('job') == 'Director'][:1]  # Only get the first director
+            if directors:
+                director = directors[0]
+                if director.get('id'):
                     credits_records.append({
                         'movie_id': movie_id,
-                        'person_id': person['id'],
+                        'person_id': director['id'],
                         'credit_type': 'crew',
                         'character_name': None,
                         'credit_order': None,
-                        'department': person.get('department', 'Directing'),
-                        'job': person.get('job')
+                        'department': director.get('department', 'Directing'),
+                        'job': director.get('job')
                     })
-                    break  # Only get the first director
+                    logger.info(f"  - Director: {director.get('name')}")
+            else:
+                logger.warning(f"No director found for movie {movie_id}")
 
             if not credits_records:
                 logger.warning(f"No credits found for movie {movie_id}")
@@ -149,8 +167,48 @@ class TMDBUpdater:
             self.conn.execute(insert_stmt, credits_records)
             self.conn.commit()
 
+            # Log summary
+            actor_count = len([r for r in credits_records if r['credit_type'] == 'cast'])
+            director_count = len([r for r in credits_records if r['credit_type'] == 'crew'])
+            logger.info(f"Added {actor_count} actors and {director_count} director(s) for movie {movie_id}")
+
         except Exception as e:
             logger.error(f"Error updating credits for movie {movie_id}: {str(e)}")
+            raise
+
+    def _update_genres(self, movie_id: int, movie_data: Dict):
+        """Update genres for a movie."""
+        try:
+            # Delete existing genres
+            delete_stmt = text("DELETE FROM genres WHERE movie_id = :movie_id")
+            self.conn.execute(delete_stmt, {'movie_id': movie_id})
+
+            # Get genres from movie data
+            genres = movie_data.get('genres', [])
+            if not genres:
+                logger.warning(f"No genres found for movie {movie_id}")
+                return
+
+            # Insert new genres
+            insert_stmt = text("""
+                INSERT INTO genres (movie_id, genre_name)
+                VALUES (:movie_id, :genre_name)
+            """)
+
+            genre_records = [
+                {'movie_id': movie_id, 'genre_name': genre['name']}
+                for genre in genres
+            ]
+
+            self.conn.execute(insert_stmt, genre_records)
+            self.conn.commit()
+            
+            # Log genre names
+            genre_names = [genre['name'] for genre in genres]
+            logger.info(f"Added genres for movie {movie_id}: {', '.join(genre_names)}")
+
+        except Exception as e:
+            logger.error(f"Error updating genres for movie {movie_id}: {str(e)}")
             raise
 
     def search_and_add_movie(self, search_term: str) -> bool:
@@ -190,11 +248,22 @@ class TMDBUpdater:
                 logger.info("All found movies already exist in database")
                 return False
 
+            # Get detailed movie info including genres for each result
+            detailed_results = []
+            for movie in new_results:
+                movie_id = movie['id']
+                movie_details = self.client.get_movie_details(movie_id)
+                if movie_details:
+                    detailed_results.append(movie_details)
+
             # Display results for user selection
             print("\nFound the following movies:")
-            for i, movie in enumerate(new_results, 1):
+            for i, movie in enumerate(detailed_results, 1):
                 release_date = movie.get('release_date', 'N/A')
+                genres = [genre['name'] for genre in movie.get('genres', [])]
+                genres_str = ', '.join(genres) if genres else 'No genres'
                 print(f"{i}. {movie['title']} ({release_date}) - ID: {movie['id']}")
+                print(f"   Genres: {genres_str}")
 
             # Get user selection
             while True:
@@ -202,14 +271,14 @@ class TMDBUpdater:
                     selection = int(input("\nEnter the number of the movie to add (0 to cancel): "))
                     if selection == 0:
                         return False
-                    if 1 <= selection <= len(new_results):
+                    if 1 <= selection <= len(detailed_results):
                         break
                     print("Invalid selection. Please try again.")
                 except ValueError:
                     print("Please enter a valid number.")
 
             # Get selected movie
-            selected_movie = new_results[selection - 1]
+            selected_movie = detailed_results[selection - 1]
             
             # Add movie to database
             return self._add_movie_to_db(selected_movie['id'])
@@ -279,6 +348,9 @@ class TMDBUpdater:
 
             self.conn.execute(insert_stmt, movie_record)
 
+            # Add genres
+            self._update_genres(movie_id, movie_data)
+
             # Add credits if available
             if credits_data:
                 self._update_credits(movie_id, credits_data)
@@ -336,6 +408,15 @@ class TMDBUpdater:
             # Add new movies
             added_count = 0
             for movie in tqdm(movies_to_add, desc="Adding new movies"):
+                # Get detailed movie info including genres
+                movie_details = self.client.get_movie_details(movie['id'])
+                if not movie_details:
+                    continue
+
+                # Log genres for this movie
+                genres = [genre['name'] for genre in movie_details.get('genres', [])]
+                logger.info(f"Adding new movie {movie['id']} with genres: {', '.join(genres) if genres else 'No genres'}")
+
                 if self._add_movie_to_db(movie['id']):
                     added_count += 1
 
@@ -347,11 +428,7 @@ class TMDBUpdater:
             return 0
 
     def update_all_movies(self, batch_size: int = 100) -> int:
-        """Update all movies in the database that have been updated in TMDB.
-        
-        Args:
-            batch_size: Number of movies to process in each batch. Default is 100.
-        """
+        """Update all movies in the database that have been updated in TMDB."""
         try:
             # Get total count of movies
             count_result = self.conn.execute(text("SELECT COUNT(*) FROM movies"))
@@ -394,8 +471,11 @@ class TMDBUpdater:
                             logger.warning(f"Could not find movie {movie_id} in TMDB")
                             continue
 
+                        # Log genres for this movie
+                        genres = [genre['name'] for genre in movie_data.get('genres', [])]
+                        logger.info(f"Updating movie {movie_id} with genres: {', '.join(genres) if genres else 'No genres'}")
+
                         # Update movie regardless of last update time
-                        # This ensures we always have the latest data
                         if self.update_existing_movie(movie_id):
                             updated_count += 1
 
