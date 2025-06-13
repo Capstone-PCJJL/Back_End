@@ -26,12 +26,24 @@ git clone <repository-url>
 cd <repository-directory>
 ```
 
-2. Install dependencies:
+2. Create and activate a virtual environment:
+```bash
+# Create a virtual environment
+python -m venv venv
+
+# Activate the virtual environment
+# On macOS/Linux:
+source venv/bin/activate
+# On Windows:
+.\venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables:
+4. Set up environment variables:
 Create a `.env` file in the project root with:
 ```
 API_KEY=your_tmdb_api_key
