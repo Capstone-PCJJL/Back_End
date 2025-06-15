@@ -21,12 +21,14 @@ This project implements a data pipeline for fetching, processing, and storing mo
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone <repository-url>
 cd <repository-directory>
 ```
 
 2. Create and activate a virtual environment:
+
 ```bash
 # Create a virtual environment
 python -m venv venv
@@ -39,12 +41,20 @@ source venv/bin/activate
 ```
 
 3. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
-Create a `.env` file in the project root with:
+4. Updating requirements.txt
+
+```bash
+pip freeze > requirements.txt
+```
+
+5. Set up environment variables:
+   Create a `.env` file in the project root with:
+
 ```
 API_KEY=your_tmdb_api_key
 TMDB_BEARER_TOKEN=your_tmdb_bearer_token
@@ -65,6 +75,7 @@ python -m src.etl.tmdb_etl --initial
 ```
 
 Optional parameters:
+
 - `--batch-size`: Number of movies to process in each batch (default: 100)
 - `--max-workers`: Maximum number of parallel workers (default: 10)
 - `--test-year`: Test with a single year (e.g., 2024)
@@ -82,21 +93,25 @@ python -m src.etl.load_tmdb_csvs --initial
 The project provides several ways to update movie data:
 
 1. Update a specific movie by ID:
+
 ```bash
 python -m src.etl.update_tmdb_data --update 123456
 ```
 
 2. Update all movies in the database:
+
 ```bash
 python -m src.etl.update_tmdb_data --update
 ```
 
 3. Update all movies with a custom batch size:
+
 ```bash
 python -m src.etl.update_tmdb_data --update --batch-size 50
 ```
 
 4. Search and add a new movie:
+
 ```bash
 # Search by movie title
 python -m src.etl.update_tmdb_data --search "Inception"
@@ -104,7 +119,9 @@ python -m src.etl.update_tmdb_data --search "Inception"
 # Search by movie ID
 python -m src.etl.update_tmdb_data --search 27205
 ```
+
 This will:
+
 - If searching by title:
   - Search TMDB for movies matching the title
   - Show a list of results
@@ -115,6 +132,7 @@ This will:
 - Add the selected movie to the database
 
 5. Add new movies based on release date:
+
 ```bash
 # Add all movies since the last update
 python -m src.etl.update_tmdb_data --add-new-movies
@@ -134,29 +152,34 @@ python -m src.etl.update_tmdb_data --add-new-movies --time-period month
 The pipeline processes and stores the following data:
 
 ### Movies
+
 - Basic movie information (title, overview, release date, etc.)
 - Ratings and popularity metrics
 - Budget and revenue information
 - Poster and backdrop paths
 
 ### Credits
+
 - Top 8 actors for each movie
 - Main director for each movie
 - Character names and credit order for actors
 - Department and job information for crew
 
 ### People
+
 - Basic person information (name, profile path)
 - Gender and known department
 - Only includes actors and directors
 
 ### Genres
+
 - Movie-genre associations
 - Genre names
 
 ## Database Schema
 
 The database includes the following tables:
+
 - `movies`: Stores movie information
 - `credits`: Stores movie credits (actors and directors)
 - `people`: Stores person information

@@ -115,7 +115,8 @@ class TMDBDataLoader:
             chunks = pd.read_csv(
                 file_path,
                 chunksize=self.chunk_size,
-                quoting=3,  # QUOTE_NONE - disable quote parsing
+                quoting=1,  # QUOTE_ALL - quote all fields
+                quotechar='"',
                 escapechar='\\',
                 on_bad_lines='skip',  # Skip bad lines instead of failing
                 engine='python',  # Use Python engine for better handling of malformed data
@@ -168,7 +169,7 @@ class TMDBDataLoader:
                         for col, dtype in numeric_columns.items():
                             try:
                                 # First convert to float to handle any decimal points
-                                temp_col = pd.to_numeric(chunk[col], errors='coerce')
+                                temp_col = pd.to_numeric(chunk[col].str.strip('"'), errors='coerce')
                                 if dtype == 'Int64':
                                     # For integer columns, round to nearest integer and convert
                                     chunk[col] = temp_col.round().astype('Int64')
@@ -184,7 +185,7 @@ class TMDBDataLoader:
                     if 'release_date' in chunk.columns:
                         # Convert release_date to datetime with explicit format
                         chunk['release_date'] = pd.to_datetime(
-                            chunk['release_date'],
+                            chunk['release_date'].str.strip('"'),
                             format='%Y-%m-%d',  # Expected format: YYYY-MM-DD
                             errors='coerce'  # Convert invalid dates to NaT
                         )
