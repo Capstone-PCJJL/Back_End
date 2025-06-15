@@ -64,54 +64,54 @@ DB_PASSWORD=your_db_password
 DB_NAME=your_db_name
 ```
 
-## Usage
+## Database Synchronization Guide
 
-### Initial Data Load
+### Initial Setup
 
-To perform the initial data load from TMDB:
-
+1. **First-time Database Load**:
 ```bash
 python -m src.etl.tmdb_etl --initial
 ```
-
 Optional parameters:
-
 - `--batch-size`: Number of movies to process in each batch (default: 100)
 - `--max-workers`: Maximum number of parallel workers (default: 10)
 - `--test-year`: Test with a single year (e.g., 2024)
 
-### Loading Data from CSV
+### Regular Updates
 
-To load data from CSV files into the database:
-
+1. **Update All Movies**:
 ```bash
-python -m src.etl.load_tmdb_csvs --initial
+# Update all movies in the database
+python -m src.etl.update_tmdb_data --update
+
+# Update with custom batch size
+python -m src.etl.update_tmdb_data --update --batch-size 50
 ```
 
-### Updating Movie Data
-
-The project provides several ways to update movie data:
-
-1. Update a specific movie by ID:
-
+2. **Update Specific Movie**:
 ```bash
 python -m src.etl.update_tmdb_data --update 123456
 ```
 
-2. Update all movies in the database:
-
+3. **Add New Movies**:
 ```bash
-python -m src.etl.update_tmdb_data --update
+# Add movies from the last day
+python -m src.etl.update_tmdb_data --add-new-movies --time-period day
+
+# Add movies from the last week
+python -m src.etl.update_tmdb_data --add-new-movies --time-period week
+
+# Add movies from the last month
+python -m src.etl.update_tmdb_data --add-new-movies --time-period month
+
+# Add movies from the last X days (e.g., 200 days)
+python -m src.etl.update_tmdb_data --add-new-movies --time-period 200
+
+# Add movies since the last update in database
+python -m src.etl.update_tmdb_data --add-new-movies
 ```
 
-3. Update all movies with a custom batch size:
-
-```bash
-python -m src.etl.update_tmdb_data --update --batch-size 50
-```
-
-4. Search and add a new movie:
-
+4. **Search and Add Specific Movies**:
 ```bash
 # Search by movie title
 python -m src.etl.update_tmdb_data --search "Inception"
@@ -120,30 +120,26 @@ python -m src.etl.update_tmdb_data --search "Inception"
 python -m src.etl.update_tmdb_data --search 27205
 ```
 
-This will:
+### Recommended Update Schedule
 
-- If searching by title:
-  - Search TMDB for movies matching the title
-  - Show a list of results
-  - Let you choose which movie to add
-- If searching by ID:
-  - Directly fetch the movie with that ID
-  - Add it to the database if it doesn't already exist
-- Add the selected movie to the database
-
-5. Add new movies based on release date:
-
+1. **Daily Updates**:
 ```bash
-# Add all movies since the last update
-python -m src.etl.update_tmdb_data --add-new-movies
-
-# Add movies from the last day
+# Update all movies and add new ones from the last day
+python -m src.etl.update_tmdb_data --update
 python -m src.etl.update_tmdb_data --add-new-movies --time-period day
+```
 
-# Add movies from the last week
+2. **Weekly Updates**:
+```bash
+# Update all movies and add new ones from the last week
+python -m src.etl.update_tmdb_data --update
 python -m src.etl.update_tmdb_data --add-new-movies --time-period week
+```
 
-# Add movies from the last month
+3. **Monthly Deep Update**:
+```bash
+# Update all movies and add new ones from the last month
+python -m src.etl.update_tmdb_data --update
 python -m src.etl.update_tmdb_data --add-new-movies --time-period month
 ```
 

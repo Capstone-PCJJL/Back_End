@@ -381,16 +381,23 @@ class TMDBUpdater:
 
             # Calculate start date based on time period
             if time_period:
-                if time_period == 'day':
-                    start_date = latest_date - timedelta(days=1)
-                elif time_period == 'week':
-                    start_date = latest_date - timedelta(weeks=1)
-                elif time_period == 'month':
-                    start_date = latest_date - timedelta(days=30)
-                else:
-                    logger.error(f"Invalid time period: {time_period}")
-                    return 0
+                try:
+                    # Try to parse as number of days
+                    days = int(time_period)
+                    start_date = latest_date - timedelta(days=days)
+                except ValueError:
+                    # If not a number, check predefined periods
+                    if time_period == 'day':
+                        start_date = latest_date - timedelta(days=1)
+                    elif time_period == 'week':
+                        start_date = latest_date - timedelta(weeks=1)
+                    elif time_period == 'month':
+                        start_date = latest_date - timedelta(days=30)
+                    else:
+                        logger.error(f"Invalid time period: {time_period}")
+                        return 0
             else:
+                # If no time period specified, use the latest date
                 start_date = latest_date
 
             # Get new movies from TMDB
@@ -507,9 +514,10 @@ def main():
     parser.add_argument('--update', type=int, nargs='?', const=True,
                        help='Update movie by ID or all movies if no ID provided')
     parser.add_argument('--search', type=str, help='Search and add movie by name')
-    parser.add_argument('--add-new-movies', action='store_true', help='Add new movies since last update')
-    parser.add_argument('--time-period', choices=['day', 'week', 'month'], 
-                       help='Time period for new movies (day/week/month)')
+    parser.add_argument('--add-new-movies', action='store_true',
+                       help='Add new movies based on release date')
+    parser.add_argument('--time-period', type=str,
+                       help='Time period for new movies (day/week/month or number of days)')
     parser.add_argument('--batch-size', type=int, default=100,
                        help='Number of movies to process in each batch (default: 100)')
     
