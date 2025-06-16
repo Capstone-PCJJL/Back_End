@@ -422,8 +422,8 @@ class TMDBETL:
         logger.info(f"Movies without actors: {len(self.error_stats['no_actors'])}")
         
         if self.error_stats['not_found']:
-            logger.info("\nSample of not found movie IDs:")
-            logger.info(list(self.error_stats['not_found'])[:10])
+            logger.info("\nAll not found movie IDs:")
+            logger.info(list(self.error_stats['not_found']))
         
         if self.error_stats['timeout']:
             logger.info("\nSample of timeout movie IDs:")
@@ -547,6 +547,25 @@ class TMDBETL:
             self._print_error_summary()
             raise
 
+def clear_log_files():
+    """Clear all log files before starting a new run."""
+    log_files = [
+        'logs/database.log',
+        'logs/schema.log',
+        'logs/schema_check.log',
+        'logs/tmdb_api.log',
+        'logs/tmdb_etl.log',
+        'logs/tmdb_load.log'
+    ]
+    
+    for log_file in log_files:
+        try:
+            with open(log_file, 'w') as f:
+                f.write('')  # Clear the file
+            logger.info(f"Cleared log file: {log_file}")
+        except Exception as e:
+            logger.warning(f"Could not clear log file {log_file}: {str(e)}")
+
 def main():
     """Main entry point."""
     import argparse
@@ -560,6 +579,9 @@ def main():
     if not args.initial:
         logger.error("This script is for initial data loading only. Use --initial flag to proceed.")
         sys.exit(1)
+
+    # Clear log files before starting
+    clear_log_files()
 
     logger.info("Starting initial TMDB data load...")
     etl = TMDBETL()
