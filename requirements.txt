@@ -451,6 +451,7 @@ s3transfer==0.11.1
 safetensors==0.5.2
 sagemaker==2.239.1
 sagemaker-core==1.0.19
+schedule==1.2.2
 schema==0.7.7
 scikit-image @ file:///private/var/folders/nz/j6p8yfhx1mv_0grj5xl4650h0000gp/T/abs_12rg0hdzgk/croot/scikit-image_1682528304529/work
 scikit-learn==1.6.1

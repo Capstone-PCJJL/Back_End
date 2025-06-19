@@ -11,6 +11,7 @@ This project implements a data pipeline for fetching, processing, and storing mo
 - Efficient batch processing
 - Rate limiting and error handling
 - Database storage with MySQL
+- Automated synchronization capabilities
 
 ## Prerequisites
 
@@ -46,13 +47,19 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. Updating requirements.txt
+4. Install automation dependencies:
+
+```bash
+pip install schedule
+```
+
+5. Updating requirements.txt
 
 ```bash
 pip freeze > requirements.txt
 ```
 
-5. Set up environment variables:
+6. Set up environment variables:
    Create a `.env` file in the project root with:
 
 ```
@@ -62,6 +69,7 @@ DB_HOST=localhost
 DB_USER=your_db_user
 DB_PASSWORD=your_db_password
 DB_NAME=your_db_name
+PROJECT_DIR=your_project_directory
 ```
 
 ## Database Synchronization Guide
@@ -143,6 +151,51 @@ python -m src.etl.update_tmdb_data --update
 python -m src.etl.update_tmdb_data --add-new-movies --time-period month
 ```
 
+## Automated Synchronization
+
+### Option 1: Shell Script with Cron (Recommended)
+
+1. **Make the script executable**:
+```bash
+chmod +x scripts/sync_tmdb.sh
+```
+
+2. **Set up cron job**:
+```bash
+# Edit crontab
+crontab -e
+
+# Add one of these lines:
+# Daily at 2 AM
+0 2 * * * /Users/jeevanparmar/Uni/Capstone/Back_End/scripts/sync_tmdb.sh
+
+# Weekly on Sunday at 3 AM
+0 3 * * 0 /Users/jeevanparmar/Uni/Capstone/Back_End/scripts/sync_tmdb.sh
+
+# Every 6 hours
+0 */6 * * * /Users/jeevanparmar/Uni/Capstone/Back_End/scripts/sync_tmdb.sh
+```
+
+### Option 2: Python Scheduler
+
+1. **Run the automated scheduler**:
+```bash
+python scripts/automated_sync.py
+```
+
+2. **The scheduler will**:
+- Run daily updates at 2:00 AM
+- Run weekly updates on Sunday at 3:00 AM
+- Run monthly updates on the 1st of each month at 4:00 AM
+- Log all activities to `logs/automated_sync.log`
+
+### Option 3: Manual Shell Script
+
+Run the synchronization script manually:
+```bash
+./scripts/sync_tmdb.sh
+```
+
 ## Data Structure
 
 The pipeline processes and stores the following data:
@@ -188,6 +241,7 @@ The database includes the following tables:
 - Detailed logging of all operations
 - Batch processing with retry mechanisms
 - Memory management for large datasets
+- Automated log file clearing before each run
 
 ## Contributing
 
