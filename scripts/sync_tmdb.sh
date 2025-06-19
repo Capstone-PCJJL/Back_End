@@ -5,7 +5,10 @@
 
 # Load environment variables from .env file
 if [ -f ".env" ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    # Use a more robust method to load environment variables
+    set -a  # automatically export all variables
+    source .env 2>/dev/null || true
+    set +a  # stop automatically exporting
 fi
 
 # Set the project directory from environment variable or use default

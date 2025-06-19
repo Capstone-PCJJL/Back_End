@@ -115,12 +115,24 @@ def setup_schedule():
     schedule.every().sunday.at("03:00").do(weekly_update)
     
     # Monthly updates on the 1st of each month at 4 AM
-    schedule.every().month.at("04:00").do(monthly_update)
+    # Note: schedule library doesn't support monthly scheduling directly
+    # We'll use a workaround by checking the date in the daily job
+    schedule.every().day.at("04:00").do(check_monthly_update)
     
     logger.info("Scheduled tasks:")
     logger.info("- Daily updates: 2:00 AM")
     logger.info("- Weekly updates: Sunday 3:00 AM")
     logger.info("- Monthly updates: 1st of month 4:00 AM")
+
+def check_monthly_update():
+    """Check if it's the first of the month and run monthly update if so."""
+    today = datetime.now()
+    
+    if today.day == 1:
+        logger.info("First day of month detected - running monthly update")
+        monthly_update()
+    else:
+        logger.info(f"Not first day of month (day {today.day}) - skipping monthly update")
 
 def main():
     """Main function to run the automated scheduler."""
