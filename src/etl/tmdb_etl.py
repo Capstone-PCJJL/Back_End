@@ -111,145 +111,145 @@ class TMDBETL:
         """Process a single movie and its related data."""
         retry_count = 0
         while retry_count < self.max_retries:
-        try:
-            # Get movie details with caching
-            movie_data = self.client.get_movie_details(movie_id)
-            if not movie_data:
-                self.error_stats['not_found'].add(movie_id)
-                return None
+            try:
+                # Get movie details with caching
+                movie_data = self.client.get_movie_details(movie_id)
+                if not movie_data:
+                    self.error_stats['not_found'].add(movie_id)
+                    return None
 
                 # Validate movie data
                 if not self._validate_movie_data(movie_data):
                     self.error_stats['validation_error'].add(movie_id)
                     return None
 
-            # Get credits with caching
-            credits_data = self.client.get_movie_credits(movie_id)
-            if not credits_data:
+                # Get credits with caching
+                credits_data = self.client.get_movie_credits(movie_id)
+                if not credits_data:
                     logger.warning(f"No credits found for movie {movie_id}")
                     credits_data = {'cast': [], 'crew': []}
 
-            # Process cast and directors in parallel
-            people_data = []
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                # Submit all person detail requests
-                person_futures = {}
-                
-                # Process cast and directors together with deduplication
-                all_people = []
-                # Get cast (actors) - top 8
-                all_people.extend(credits_data.get('cast', [])[:8])
-                # Get main director from crew
-                directors = [person for person in credits_data.get('crew', []) 
-                           if person.get('job') == 'Director'][:1]  # Only get the first director
-                all_people.extend(directors)
-                
-                # Deduplicate people and filter out already cached
-                seen_ids = set()
-                for person in all_people:
-                    person_id = person.get('id')
-                    if person_id and person_id not in self.person_cache and person_id not in seen_ids:
-                        seen_ids.add(person_id)
-                        person_futures[executor.submit(self.client.get_person, person_id)] = person_id
-                
-                # Process results as they complete
-                for future in as_completed(person_futures):
-                    try:
-                        person_data = future.result()
-                        if person_data:
-                            self.person_cache[person_futures[future]] = person_data
-                            people_data.append(person_data)
-                    except requests.exceptions.Timeout:
-                        self.error_stats['timeout'].add(person_futures[future])
-                        logger.error(f"Timeout getting person details for ID {person_futures[future]}")
-                    except requests.exceptions.RequestException as e:
-                        self.error_stats['api_error'].add(person_futures[future])
-                        logger.error(f"API error getting person details for ID {person_futures[future]}: {str(e)}")
-                    except Exception as e:
-                        self.error_stats['processing_error'].add(person_futures[future])
-                        logger.error(f"Error processing person details for ID {person_futures[future]}: {str(e)}")
+                # Process cast and directors in parallel
+                people_data = []
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    # Submit all person detail requests
+                    person_futures = {}
+                    
+                    # Process cast and directors together with deduplication
+                    all_people = []
+                    # Get cast (actors) - top 8
+                    all_people.extend(credits_data.get('cast', [])[:8])
+                    # Get main director from crew
+                    directors = [person for person in credits_data.get('crew', []) 
+                               if person.get('job') == 'Director'][:1]  # Only get the first director
+                    all_people.extend(directors)
+                    
+                    # Deduplicate people and filter out already cached
+                    seen_ids = set()
+                    for person in all_people:
+                        person_id = person.get('id')
+                        if person_id and person_id not in self.person_cache and person_id not in seen_ids:
+                            seen_ids.add(person_id)
+                            person_futures[executor.submit(self.client.get_person, person_id)] = person_id
+                    
+                    # Process results as they complete
+                    for future in as_completed(person_futures):
+                        try:
+                            person_data = future.result()
+                            if person_data:
+                                self.person_cache[person_futures[future]] = person_data
+                                people_data.append(person_data)
+                        except requests.exceptions.Timeout:
+                            self.error_stats['timeout'].add(person_futures[future])
+                            logger.error(f"Timeout getting person details for ID {person_futures[future]}")
+                        except requests.exceptions.RequestException as e:
+                            self.error_stats['api_error'].add(person_futures[future])
+                            logger.error(f"API error getting person details for ID {person_futures[future]}: {str(e)}")
+                        except Exception as e:
+                            self.error_stats['processing_error'].add(person_futures[future])
+                            logger.error(f"Error processing person details for ID {person_futures[future]}: {str(e)}")
 
-            # Create movie record
-            movie_record = {
-                'id': movie_data['id'],
-                'title': movie_data['title'],
-                'original_title': movie_data['original_title'],
-                'overview': movie_data['overview'],
-                'release_date': movie_data['release_date'],
-                'runtime': movie_data['runtime'],
-                'status': movie_data['status'],
-                'vote_average': movie_data['vote_average'],
-                'vote_count': movie_data['vote_count'],
-                'popularity': movie_data['popularity'],
-                'poster_path': movie_data['poster_path'],
-                'backdrop_path': movie_data['backdrop_path'],
-                'budget': movie_data['budget'],
-                'revenue': movie_data['revenue']
-            }
+                # Create movie record
+                movie_record = {
+                    'id': movie_data['id'],
+                    'title': movie_data['title'],
+                    'original_title': movie_data['original_title'],
+                    'overview': movie_data['overview'],
+                    'release_date': movie_data['release_date'],
+                    'runtime': movie_data['runtime'],
+                    'status': movie_data['status'],
+                    'vote_average': movie_data['vote_average'],
+                    'vote_count': movie_data['vote_count'],
+                    'popularity': movie_data['popularity'],
+                    'poster_path': movie_data['poster_path'],
+                    'backdrop_path': movie_data['backdrop_path'],
+                    'budget': movie_data['budget'],
+                    'revenue': movie_data['revenue']
+                }
 
-            # Create credits records
-            credits_records = []
-            # Add cast (actors) - top 8
-            for person in credits_data.get('cast', [])[:8]:
-                if person.get('id'):
-                    credits_records.append({
-                        'movie_id': movie_id,
-                        'person_id': person['id'],
-                        'credit_type': 'cast',
-                        'character_name': person.get('character'),
-                        'credit_order': person.get('order')
+                # Create credits records
+                credits_records = []
+                # Add cast (actors) - top 8
+                for person in credits_data.get('cast', [])[:8]:
+                    if person.get('id'):
+                        credits_records.append({
+                            'movie_id': movie_id,
+                            'person_id': person['id'],
+                            'credit_type': 'cast',
+                            'character_name': person.get('character'),
+                            'credit_order': person.get('order')
+                        })
+
+                # Add main director
+                directors = [person for person in credits_data.get('crew', [])
+                            if person.get('job') == 'Director'][:1]  # Only get the first director
+                for person in directors:
+                    if person.get('id'):
+                        credits_records.append({
+                            'movie_id': movie_id,
+                            'person_id': person['id'],
+                            'credit_type': 'crew',
+                            'department': 'Directing',
+                            'job': 'Director'
+                        })
+
+                # Create people records
+                people_records = []
+                for person in people_data:
+                    people_records.append({
+                        'id': person['id'],
+                        'name': person['name'],
+                        'profile_path': person.get('profile_path'),
+                        'gender': person.get('gender'),
+                        'known_for_department': person.get('known_for_department')
                     })
 
-            # Add main director
-            directors = [person for person in credits_data.get('crew', [])
-                        if person.get('job') == 'Director'][:1]  # Only get the first director
-            for person in directors:
-                if person.get('id'):
-                    credits_records.append({
+                # Create genres records
+                genres_records = []
+                for genre in movie_data.get('genres', []):
+                    genres_records.append({
                         'movie_id': movie_id,
-                        'person_id': person['id'],
-                        'credit_type': 'crew',
-                        'department': 'Directing',
-                        'job': 'Director'
+                        'genre_name': genre['name']
                     })
 
-            # Create people records
-            people_records = []
-            for person in people_data:
-                people_records.append({
-                    'id': person['id'],
-                    'name': person['name'],
-                    'profile_path': person.get('profile_path'),
-                    'gender': person.get('gender'),
-                    'known_for_department': person.get('known_for_department')
-                })
+                return {
+                    'movie': movie_record,
+                    'credits': credits_records,
+                    'people': people_records,
+                    'genres': genres_records
+                }
 
-            # Create genres records
-            genres_records = []
-            for genre in movie_data.get('genres', []):
-                genres_records.append({
-                    'movie_id': movie_id,
-                    'genre_name': genre['name']
-                })
-
-            return {
-                'movie': movie_record,
-                'credits': credits_records,
-                'people': people_records,
-                'genres': genres_records
-            }
-
-        except requests.exceptions.Timeout:
+            except requests.exceptions.Timeout:
                 retry_count += 1
                 if retry_count < self.max_retries:
                     wait_time = self.retry_delay * (self.backoff_factor ** (retry_count - 1))
                     logger.warning(f"Timeout processing movie {movie_id}, retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
-            self.error_stats['timeout'].add(movie_id)
+                self.error_stats['timeout'].add(movie_id)
                 logger.error(f"Timeout processing movie {movie_id} after {self.max_retries} retries")
-            return None
-        except requests.exceptions.RequestException as e:
+                return None
+            except requests.exceptions.RequestException as e:
                 if e.response and e.response.status_code == 404:
                     self.error_stats['not_found'].add(movie_id)
                     logger.error(f"Movie {movie_id} not found in TMDB")
@@ -260,13 +260,13 @@ class TMDBETL:
                     logger.warning(f"API error processing movie {movie_id}, retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                     continue
-            self.error_stats['api_error'].add(movie_id)
+                self.error_stats['api_error'].add(movie_id)
                 logger.error(f"API error processing movie {movie_id} after {self.max_retries} retries: {str(e)}")
-            return None
-        except Exception as e:
-            self.error_stats['processing_error'].add(movie_id)
-            logger.error(f"Error processing movie {movie_id}: {str(e)}")
-            return None
+                return None
+            except Exception as e:
+                self.error_stats['processing_error'].add(movie_id)
+                logger.error(f"Error processing movie {movie_id}: {str(e)}")
+                return None
 
     def _append_to_dataframes(self, data: Dict[str, Any]):
         """Append processed data to DataFrames."""
